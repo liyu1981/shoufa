@@ -147,21 +147,25 @@ export async function addAsset(
     return fullAsset
   }
 
-  const r = await getRedis()
-  const exists = await r.exists(slugKey(slug))
-  if (!exists) return null
+  try {
+    const r = await getRedis()
+    const exists = await r.exists(slugKey(slug))
+    if (!exists) return null
 
-  const assetData: Record<string, string> = { [id]: JSON.stringify(fullAsset) }
-  await r.hset(assetsKey(slug), assetData)
+    // Store asset as JSON string
+    const assetJson = JSON.stringify(fullAsset)
+    await r.hset(assetsKey(slug), { [id]: assetJson })
 
-  // Set TTL based on max expiry
-  const assets = await getAssets(slug)
-  const maxExpiry = Math.max(...assets.map((a) => a.expiresAt), fullAsset.expiresAt)
-  const keyTTL = Math.ceil((maxExpiry - now) / 1000) + 60
-  await r.expire(assetsKey(slug), Math.max(keyTTL, 60))
-  await r.expire(slugKey(slug), Math.max(keyTTL, 3600))
+    // Set TTL based on this asset's expiry only (simpler and reliable)
+    const keyTTL = Math.ceil(asset.ttl) + 60 // TTL in seconds + buffer
+    await r.expire(assetsKey(slug), keyTTL)
+    await r.expire(slugKey(slug), Math.max(keyTTL, 3600))
 
-  return fullAsset
+    return fullAsset
+  } catch (error) {
+    console.error("[store] addAsset error:", error)
+    return null
+  }
 }
 
 export async function getAssets(slug: string): Promise<Asset[]> {
@@ -174,27 +178,46 @@ export async function getAssets(slug: string): Promise<Asset[]> {
       .sort((a, b) => a.createdAt - b.createdAt)
   }
 
-  const r = await getRedis()
-  const raw = await r.hgetall(assetsKey(slug)) as Record<string, string> | null
-  if (!raw) return []
+  try {
+    const r = await getRedis()
+    const raw = await r.hgetall(assetsKey(slug))
 
-  const now = Date.now()
-  const assets: Asset[] = []
+    // Debug logging
+    console.log("[store] getAssets raw:", JSON.stringify(raw).substring(0, 200))
 
-  for (const [id, json] of Object.entries(raw)) {
-    try {
-      const asset: Asset = JSON.parse(json)
-      if (asset.expiresAt > now) {
-        assets.push(asset)
-      } else {
-        r.hdel(assetsKey(slug), id) // Clean up expired
-      }
-    } catch {
-      r.hdel(assetsKey(slug), id) // Corrupted data
+    if (!raw || typeof raw !== "object" || Object.keys(raw).length === 0) {
+      return []
     }
-  }
 
-  return assets.sort((a, b) => a.createdAt - b.createdAt)
+    const now = Date.now()
+    const assets: Asset[] = []
+
+    for (const [id, value] of Object.entries(raw)) {
+      try {
+        // Upstash might return the value as a string or as a parsed object
+        const jsonStr = typeof value === "string" ? value : JSON.stringify(value)
+        const asset: Asset = JSON.parse(jsonStr)
+
+        // Validate asset structure
+        if (asset && asset.id && asset.expiresAt) {
+          if (asset.expiresAt > now) {
+            assets.push(asset)
+          } else {
+            // Clean up expired asset
+            r.hdel(assetsKey(slug), id).catch(() => {})
+          }
+        }
+      } catch (parseError) {
+        console.error("[store] Failed to parse asset:", id, parseError)
+        // Don't delete on parse error - might be temporary
+      }
+    }
+
+    return assets.sort((a, b) => a.createdAt - b.createdAt)
+  } catch (error) {
+    console.error("[store] getAssets error:", error)
+    return []
+  }
 }
 
 export async function deleteAsset(slug: string, assetId: string): Promise<boolean> {
