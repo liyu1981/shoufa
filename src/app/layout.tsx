@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { ThemeProvider } from "@/components/ThemeProvider"
 import { I18nProvider } from "@/components/I18nProvider"
+import { GoogleAnalytics } from "@next/third-parties/google"
 import "./globals.css"
 
 const geistSans = Geist({
@@ -15,6 +16,7 @@ const geistMono = Geist_Mono({
 })
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://shoufa.vercel.app"
+const gaId = process.env.NEXT_PUBLIC_GA_ID || "G-XXXXXXXXXX"
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -87,6 +89,7 @@ export default function RootLayout({
             {children}
           </ThemeProvider>
         </I18nProvider>
+        <GoogleAnalytics gaId={gaId} />
       </body>
     </html>
   )
