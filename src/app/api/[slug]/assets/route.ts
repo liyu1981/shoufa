@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSlug, getAssets, addAsset } from "@/lib/store"
+import { limits } from "@/lib/config"
 
 // Force dynamic for this route
 export const dynamic = "force-dynamic"
+
+// Safety margin: reject at 90% of limit
+const SAFETY_MARGIN = 0.9
 
 // GET /api/[slug]/assets — list all non-expired assets
 export async function GET(
@@ -38,6 +42,9 @@ export async function POST(
 ) {
   try {
     const { slug } = await params
+    const config = limits()
+    const maxRequestSize = config.requestSize * SAFETY_MARGIN
+
     const space = await getSlug(slug)
 
     if (!space) {
@@ -47,18 +54,47 @@ export async function POST(
       )
     }
 
+    // Check content-length header if available (best effort)
+    const contentLength = req.headers.get("content-length")
+    if (contentLength) {
+      const size = parseInt(contentLength, 10)
+      if (size > maxRequestSize) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Request too large (${formatBytes(size)}). Maximum is ${formatBytes(maxRequestSize)}.`,
+          },
+          { status: 413 }
+        )
+      }
+    }
+
     const contentType = req.headers.get("content-type") || ""
 
     if (contentType.includes("application/json")) {
       // Text asset
       const body = await req.json()
       const text = body.content as string
-      const ttl = Math.min(Math.max(Number(body.ttl) || 300, 10), 3600) // 10s to 1h, default 5min
+
+      // Validate TTL
+      const ttl = Math.min(Math.max(Number(body.ttl) || 300, 10), config.maxTtl)
 
       if (!text || text.trim().length === 0) {
         return NextResponse.json(
           { ok: false, error: "Content cannot be empty" },
           { status: 400 }
+        )
+      }
+
+      // Check text size (approximate)
+      const textSize = new TextEncoder().encode(text).length
+      if (textSize > maxRequestSize) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Text too large (${formatBytes(textSize)}). Maximum is ${formatBytes(maxRequestSize)}.`,
+          },
+          { status: 413 }
         )
       }
 
@@ -68,12 +104,19 @@ export async function POST(
         ttl,
       })
 
+      if (!asset) {
+        return NextResponse.json(
+          { ok: false, error: "Failed to save asset" },
+          { status: 500 }
+        )
+      }
+
       return NextResponse.json({ ok: true, data: asset })
     } else if (contentType.includes("multipart/form-data")) {
       // Image asset
       const formData = await req.formData()
       const file = formData.get("file") as File | null
-      const ttl = Math.min(Math.max(Number(formData.get("ttl")) || 300, 10), 3600)
+      const ttl = Math.min(Math.max(Number(formData.get("ttl")) || 300, 10), config.maxTtl)
 
       if (!file) {
         return NextResponse.json(
@@ -89,10 +132,33 @@ export async function POST(
         )
       }
 
+      // Check file size BEFORE base64 conversion
+      const maxFileSize = config.maxImageSize * SAFETY_MARGIN
+      if (file.size > maxFileSize) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Image too large (${formatBytes(file.size)}). Maximum is ${formatBytes(maxFileSize)}.`,
+          },
+          { status: 413 }
+        )
+      }
+
       // Convert to base64 data URL
       const bytes = await file.arrayBuffer()
       const base64 = Buffer.from(bytes).toString("base64")
       const dataUrl = `data:${file.type};base64,${base64}`
+
+      // Double-check base64 size (it's ~33% larger than original)
+      if (dataUrl.length > maxRequestSize) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Image too large after encoding (${formatBytes(dataUrl.length)}). Maximum is ${formatBytes(maxRequestSize)}.`,
+          },
+          { status: 413 }
+        )
+      }
 
       const asset = await addAsset(slug, {
         type: "image",
@@ -101,6 +167,13 @@ export async function POST(
         fileName: file.name,
         ttl,
       })
+
+      if (!asset) {
+        return NextResponse.json(
+          { ok: false, error: "Failed to save image" },
+          { status: 500 }
+        )
+      }
 
       return NextResponse.json({ ok: true, data: asset })
     } else {
@@ -116,4 +189,11 @@ export async function POST(
       { status: 500 }
     )
   }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
