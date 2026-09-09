@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { useRouter, useParams } from "next/navigation"
+import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
 import { GlassCard } from "@/components/GlassCard"
 import { PasteZone } from "@/components/PasteZone"
 import { AssetCard } from "@/components/AssetCard"
+import { ThemeToggle } from "@/components/ThemeToggle"
 import type { Asset } from "@/lib/atoms"
 import {
   Copy,
@@ -20,6 +22,7 @@ import {
 export default function SlugSpacePage() {
   const router = useRouter()
   const params = useParams()
+  const { t } = useTranslation()
   const slug = params.slug as string
 
   const [assets, setAssets] = useState<Asset[]>([])
@@ -92,15 +95,15 @@ export default function SlugSpacePage() {
         <AmbientBackground />
         <main className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4">
           <GlassCard className="text-center space-y-4">
-            <p className="text-lg font-medium">Space not found</p>
+            <p className="text-lg font-medium">{t("space.notFound")}</p>
             <p className="text-sm text-muted-foreground">
-              &quot;{slug}&quot; doesn&apos;t exist or has expired.
+              {t("space.notFoundDesc", { slug })}
             </p>
             <button
               onClick={() => router.push("/")}
               className="px-4 py-2 rounded-xl glass-control hover:brightness-[1.06] transition-all"
             >
-              Go home
+              {t("space.goHome")}
             </button>
           </GlassCard>
         </main>
@@ -119,7 +122,7 @@ export default function SlugSpacePage() {
             <button
               onClick={() => router.push("/")}
               className="p-2 rounded-lg hover:bg-foreground/5 transition-all"
-              title="Go home"
+              title={t("space.goHome")}
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
@@ -129,10 +132,12 @@ export default function SlugSpacePage() {
           </div>
 
           <div className="flex items-center gap-1">
+            <ThemeToggle className="mr-1" />
+
             <button
               onClick={handleCopyLink}
               className="p-2 rounded-lg hover:bg-foreground/5 transition-all flex items-center gap-1.5"
-              title="Copy link"
+              title={t("space.copyLink")}
             >
               {copied ? (
                 <Check className="w-4 h-4 text-success" />
@@ -140,14 +145,14 @@ export default function SlugSpacePage() {
                 <Link2 className="w-4 h-4" />
               )}
               <span className="text-xs text-muted-foreground hidden sm:inline">
-                {copied ? "Copied" : "Copy link"}
+                {copied ? t("space.copied") : t("space.copyLink")}
               </span>
             </button>
 
             <button
               onClick={fetchAssets}
               className="p-2 rounded-lg hover:bg-foreground/5 transition-all"
-              title="Refresh"
+              title={t("space.refresh")}
             >
               <RefreshCw className="w-4 h-4" />
             </button>
@@ -157,7 +162,7 @@ export default function SlugSpacePage() {
                 onClick={handleClearAll}
                 disabled={clearing}
                 className="p-2 rounded-lg hover:bg-destructive/10 hover:text-destructive transition-all"
-                title="Clear all"
+                title={t("space.clearAll")}
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -171,7 +176,7 @@ export default function SlugSpacePage() {
         {/* TTL selector */}
         <div className="flex items-center gap-2 mb-4">
           <Timer className="w-4 h-4 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">Expires in:</span>
+          <span className="text-xs text-muted-foreground">{t("space.expiresIn")}:</span>
           {[60, 300, 900, 3600].map((t) => (
             <button
               key={t}
@@ -199,7 +204,7 @@ export default function SlugSpacePage() {
           ) : assets.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-sm text-muted-foreground">
-                Nothing here yet. Paste something above!
+                {t("space.empty")}
               </p>
             </div>
           ) : (
@@ -217,9 +222,24 @@ export default function SlugSpacePage() {
         {/* Footer info */}
         {assets.length > 0 && (
           <p className="text-xs text-muted-foreground/50 text-center mt-8">
-            {assets.length} asset{assets.length !== 1 ? "s" : ""} · Auto-refreshing every 2s
+            {t("space.assets", { count: assets.length })} · {t("space.refreshing")}
           </p>
         )}
+
+        {/* Footer */}
+        <footer className="mt-12 text-center">
+          <p className="text-xs text-muted-foreground/40">
+            Made with ❤️ in Sydney ·{' '}
+            <a
+              href="https://github.com/your-username/shoufa"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground/60 transition-colors"
+            >
+              GitHub
+            </a>
+          </p>
+        </footer>
       </main>
     </div>
   )

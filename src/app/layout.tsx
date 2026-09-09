@@ -1,5 +1,7 @@
 import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
+import { ThemeProvider } from "@/components/ThemeProvider"
+import { I18nProvider } from "@/components/I18nProvider"
 import "./globals.css"
 
 const geistSans = Geist({
@@ -15,6 +17,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Shoufa — Paste. Share. Disappear.",
   description: "Ephemeral clipboard with a time limit. Paste text or images, share the link, content auto-expires.",
+  icons: {
+    icon: "/api/favicon",
+  },
   openGraph: {
     title: "Shoufa",
     description: "Ephemeral clipboard with a time limit",
@@ -30,7 +35,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        {children}
+        <I18nProvider>
+          <ThemeProvider>
+            {children}
+          </ThemeProvider>
+        </I18nProvider>
       </body>
     </html>
   )

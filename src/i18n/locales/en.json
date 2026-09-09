@@ -1,0 +1,48 @@
+{
+  "app": {
+    "title": "Shoufa",
+    "tagline": "Paste. Share. Disappear.",
+    "description": "Ephemeral clipboard with a time limit"
+  },
+  "home": {
+    "join": {
+      "label": "Join a space",
+      "placeholder": "Enter slug (e.g. warm-fox)"
+    },
+    "create": {
+      "label": "Create a space",
+      "placeholder": "slug",
+      "generate": "generate"
+    },
+    "footer": "Content auto-expires after 5 minutes · No accounts needed"
+  },
+  "space": {
+    "notFound": "Space not found",
+    "notFoundDesc": "\"{{slug}}\" doesn't exist or has expired.",
+    "goHome": "Go home",
+    "copyLink": "Copy link",
+    "copied": "Copied",
+    "refresh": "Refresh",
+    "clearAll": "Clear all",
+    "expiresIn": "Expires in",
+    "assets": "{{count}} asset",
+    "assets_plural": "{{count}} assets",
+    "refreshing": "Auto-refreshing every 2s",
+    "empty": "Nothing here yet. Paste something above!"
+  },
+  "paste": {
+    "placeholder": "Paste or type text here...",
+    "hint": "Type, paste (Ctrl+V), or upload an image",
+    "hintMobile": "Type or paste text, or upload an image",
+    "submit": "Submit",
+    "upload": "Upload image",
+    "saved": "Text saved!",
+    "uploaded": "Image uploaded!",
+    "uploading": "Uploading..."
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  }
+}

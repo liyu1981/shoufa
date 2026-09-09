@@ -2,12 +2,15 @@
 
 import { useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
+import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
 import { GlassCard } from "@/components/GlassCard"
+import { ThemeToggle } from "@/components/ThemeToggle"
 import { Zap, Link2, ArrowRight, Loader2 } from "lucide-react"
 
 export default function HomePage() {
   const router = useRouter()
+  const { t } = useTranslation()
   const [customSlug, setCustomSlug] = useState("")
   const [joining, setJoining] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -98,14 +101,19 @@ export default function HomePage() {
         {/* Logo / Title */}
         <div className="text-center mb-10">
           <h1 className="text-5xl font-bold tracking-tight text-foreground mb-3">
-            Shoufa
+            {t("app.title")}
           </h1>
           <p className="text-lg text-muted-foreground max-w-md mx-auto">
-            Paste. Share. Disappear.
+            {t("app.tagline")}
           </p>
           <p className="text-sm text-muted-foreground/70 mt-1">
-            Ephemeral clipboard with a time limit
+            {t("app.description")}
           </p>
+        </div>
+
+        {/* Theme & Language toggle */}
+        <div className="absolute top-4 right-4">
+          <ThemeToggle />
         </div>
 
         {/* Main card */}
@@ -114,7 +122,7 @@ export default function HomePage() {
           <div className="space-y-3">
             <label className="text-sm font-medium text-foreground/80 flex items-center gap-2">
               <Link2 className="w-4 h-4" />
-              Join a space
+              {t("home.join.label")}
             </label>
             <div className="flex gap-2">
               <input
@@ -125,7 +133,7 @@ export default function HomePage() {
                   setError(null)
                 }}
                 onKeyDown={handleKeyDown}
-                placeholder="Enter slug (e.g. warm-fox)"
+                placeholder={t("home.join.placeholder")}
                 className="flex-1 px-4 py-2.5 rounded-xl bg-foreground/5 border border-border/50
                            text-foreground placeholder:text-muted-foreground/50
                            focus:outline-none focus:ring-2 focus:ring-ring/50
@@ -162,7 +170,7 @@ export default function HomePage() {
           <div className="space-y-3">
             <label className="text-sm font-medium text-foreground/80 flex items-center gap-2">
               <Zap className="w-4 h-4" />
-              Create a space
+              {t("home.create.label")}
             </label>
 
             <div className="flex gap-2">
@@ -183,7 +191,7 @@ export default function HomePage() {
                     }
                   }
                 }}
-                placeholder="slug"
+                placeholder={t("home.create.placeholder")}
                 className="flex-1 px-4 py-2.5 rounded-xl bg-foreground/5 border border-border/50
                            text-foreground placeholder:text-muted-foreground/50
                            focus:outline-none focus:ring-2 focus:ring-ring/50
@@ -202,7 +210,7 @@ export default function HomePage() {
                 ) : (
                   <>
                     <Zap className="w-4 h-4" />
-                    generate
+                    {t("home.create.generate")}
                   </>
                 )}
               </button>
@@ -216,9 +224,22 @@ export default function HomePage() {
         </GlassCard>
 
         {/* Footer */}
-        <p className="text-xs text-muted-foreground/50 mt-8 text-center">
-          Content auto-expires after 5 minutes · No accounts needed
-        </p>
+        <footer className="mt-12 text-center space-y-2">
+          <p className="text-xs text-muted-foreground/50">
+            {t("home.footer")}
+          </p>
+          <p className="text-xs text-muted-foreground/40">
+            Made with ❤️ in Sydney ·{' '}
+            <a
+              href="https://github.com/your-username/shoufa"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground/60 transition-colors"
+            >
+              GitHub
+            </a>
+          </p>
+        </footer>
       </main>
     </div>
   )

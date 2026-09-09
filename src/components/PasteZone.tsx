@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useRef, useState, useEffect } from "react"
+import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
 import { Clipboard, Upload, Check, Send } from "lucide-react"
 
@@ -16,6 +17,7 @@ function isMobile(): boolean {
 }
 
 export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
+  const { t } = useTranslation()
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [lastAction, setLastAction] = useState<"text" | "image" | null>(null)
@@ -172,13 +174,13 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
 
         {lastAction ? (
           <p className="text-sm font-medium text-success">
-            {lastAction === "text" ? "Text saved!" : "Image uploaded!"}
+            {lastAction === "text" ? t("paste.saved") : t("paste.uploaded")}
           </p>
         ) : uploading ? (
-          <p className="text-sm text-muted-foreground">Uploading...</p>
+          <p className="text-sm text-muted-foreground">{t("paste.uploading")}</p>
         ) : (
           <p className="text-sm text-muted-foreground">
-            {isMobileDevice ? "Type or paste text, or upload an image" : "Type, paste (Ctrl+V), or upload an image"}
+            {isMobileDevice ? t("paste.hintMobile") : t("paste.hint")}
           </p>
         )}
       </div>
@@ -196,7 +198,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
               if (canSubmit) handleTextSubmit(textInput)
             }
           }}
-          placeholder="Paste or type text here..."
+          placeholder={t("paste.placeholder")}
           rows={2}
           className="flex-1 px-4 py-3 rounded-xl bg-foreground/5 border border-border/50
                      text-foreground placeholder:text-muted-foreground/50 text-sm
@@ -214,7 +216,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
                 ? "bg-primary text-primary-foreground hover:brightness-110 active:scale-95"
                 : "bg-foreground/5 text-muted-foreground/40 cursor-not-allowed"
             )}
-            title="Submit (⌘+Enter)"
+            title={t("paste.submit")}
           >
             <Send className="w-4 h-4" />
           </button>
@@ -225,7 +227,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
                        hover:bg-foreground/10 hover:text-foreground
                        active:scale-95 transition-all duration-150
                        flex items-center justify-center"
-            title="Upload image"
+            title={t("paste.upload")}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
