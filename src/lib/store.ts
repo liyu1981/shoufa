@@ -1,7 +1,8 @@
-// Hybrid store: in-memory for local dev, Upstash Redis for production
-// No extra setup needed — just works
+// Hybrid store: Redis mock (local dev) or Upstash Redis (production)
+// Mock emulates real Redis commands to catch serialization issues early
 
 import { nanoid } from "nanoid"
+import { getRedisMock, RedisMock } from "./redis-mock"
 
 export interface Asset {
   id: string
@@ -22,105 +23,84 @@ export interface SlugMeta {
 }
 
 // ============================================================
-// In-memory store (for local development)
+// Mode detection
 // ============================================================
 
-interface MemorySpace {
-  meta: SlugMeta
-  assets: Map<string, Asset>
-}
-
-const memoryStore = new Map<string, MemorySpace>()
-
-// Sweep expired assets every 5 seconds (only in memory mode)
-let sweepInterval: NodeJS.Timeout | null = null
-
-function startMemorySweep() {
-  if (sweepInterval || !isMemoryMode()) return
-  sweepInterval = setInterval(() => {
-    const now = Date.now()
-    for (const [slug, space] of memoryStore) {
-      for (const [id, asset] of space.assets) {
-        if (now > asset.expiresAt) {
-          space.assets.delete(id)
-        }
-      }
-      // Keep empty slugs for 60 seconds
-      if (space.assets.size === 0 && now - space.meta.createdAt > 60_000) {
-        memoryStore.delete(slug)
-      }
-    }
-  }, 5000)
-}
-
-function isMemoryMode(): boolean {
-  const url = process.env.UPSTASH_REDIS_REST_URL
-  // Memory mode if no URL or if it's still the placeholder
-  return !url || url.includes("your-redis.upstash.io")
+function isUpstashRedis(): boolean {
+  return !!process.env.UPSTASH_REDIS_REST_URL && !!process.env.UPSTASH_REDIS_REST_TOKEN
 }
 
 // ============================================================
-// Upstash Redis (for production)
+// Redis clients (lazy initialization)
 // ============================================================
 
-let redisClient: any = null
+let mockRedis: RedisMock | null = null
+let upstashRedis: any = null
 
 async function getRedis() {
-  if (!redisClient) {
-    const { Redis } = await import("@upstash/redis")
-    redisClient = new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL!,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-    })
+  if (isUpstashRedis()) {
+    // Production: use Upstash Redis
+    if (!upstashRedis) {
+      const { Redis } = await import("@upstash/redis")
+      upstashRedis = new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL!,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+      })
+    }
+    return upstashRedis
+  } else {
+    // Development: use mock Redis (emulates real commands)
+    if (!mockRedis) {
+      mockRedis = getRedisMock()
+    }
+    return mockRedis
   }
-  return redisClient
 }
 
+// Key patterns
 const slugKey = (slug: string) => `slug:${slug}`
 const assetsKey = (slug: string) => `slug:${slug}:assets`
 
 // ============================================================
-// Unified API (works with both backends)
+// Unified API (works with both mock and real Redis)
 // ============================================================
 
 export async function slugExists(slug: string): Promise<boolean> {
-  if (isMemoryMode()) {
-    return memoryStore.has(slug)
-  }
   const r = await getRedis()
   const exists = await r.exists(slugKey(slug))
   return exists === 1
 }
 
 export async function createSlug(slug: string): Promise<SlugMeta> {
-  if (isMemoryMode()) {
-    const meta: SlugMeta = { slug, createdAt: Date.now() }
-    memoryStore.set(slug, { meta, assets: new Map() })
-    startMemorySweep()
-    return meta
-  }
   const r = await getRedis()
   const meta: SlugMeta = { slug, createdAt: Date.now() }
-  await r.hset(slugKey(slug), meta)
+
+  if (r instanceof RedisMock) {
+    // Mock: use ioredis-style hset with multiple args
+    await r.hset(slugKey(slug), "slug", slug, "createdAt", String(meta.createdAt))
+  } else {
+    // Upstash: use object-style hset
+    await r.hset(slugKey(slug), meta)
+  }
+
   await r.expire(slugKey(slug), 3600)
   return meta
 }
 
 export async function getSlug(slug: string): Promise<SlugMeta | null> {
-  if (isMemoryMode()) {
-    const space = memoryStore.get(slug)
-    return space?.meta ?? null
-  }
   const r = await getRedis()
   const meta = await r.hgetall(slugKey(slug))
+
   if (!meta || Object.keys(meta).length === 0) return null
-  return meta as SlugMeta
+
+  // Normalize: ensure consistent types
+  return {
+    slug: String(meta.slug),
+    createdAt: Number(meta.createdAt),
+  } as SlugMeta
 }
 
 export async function deleteSlug(slug: string): Promise<boolean> {
-  if (isMemoryMode()) {
-    return memoryStore.delete(slug)
-  }
   const r = await getRedis()
   const existed = await r.exists(slugKey(slug))
   await r.del(slugKey(slug), assetsKey(slug))
@@ -140,24 +120,22 @@ export async function addAsset(
     expiresAt: now + asset.ttl * 1000,
   }
 
-  if (isMemoryMode()) {
-    const space = memoryStore.get(slug)
-    if (!space) return null
-    space.assets.set(id, fullAsset)
-    return fullAsset
-  }
-
   try {
     const r = await getRedis()
     const exists = await r.exists(slugKey(slug))
     if (!exists) return null
 
-    // Store asset as JSON string
     const assetJson = JSON.stringify(fullAsset)
-    await r.hset(assetsKey(slug), { [id]: assetJson })
+    const keyTTL = Math.ceil(asset.ttl) + 60
 
-    // Set TTL based on this asset's expiry only (simpler and reliable)
-    const keyTTL = Math.ceil(asset.ttl) + 60 // TTL in seconds + buffer
+    if (r instanceof RedisMock) {
+      // Mock: use ioredis-style hset
+      await r.hset(assetsKey(slug), id, assetJson)
+    } else {
+      // Upstash: use object-style hset
+      await r.hset(assetsKey(slug), { [id]: assetJson })
+    }
+
     await r.expire(assetsKey(slug), keyTTL)
     await r.expire(slugKey(slug), Math.max(keyTTL, 3600))
 
@@ -169,21 +147,9 @@ export async function addAsset(
 }
 
 export async function getAssets(slug: string): Promise<Asset[]> {
-  if (isMemoryMode()) {
-    const space = memoryStore.get(slug)
-    if (!space) return []
-    const now = Date.now()
-    return Array.from(space.assets.values())
-      .filter((a) => a.expiresAt > now)
-      .sort((a, b) => a.createdAt - b.createdAt)
-  }
-
   try {
     const r = await getRedis()
     const raw = await r.hgetall(assetsKey(slug))
-
-    // Debug logging
-    console.log("[store] getAssets raw:", JSON.stringify(raw).substring(0, 200))
 
     if (!raw || typeof raw !== "object" || Object.keys(raw).length === 0) {
       return []
@@ -194,22 +160,18 @@ export async function getAssets(slug: string): Promise<Asset[]> {
 
     for (const [id, value] of Object.entries(raw)) {
       try {
-        // Upstash might return the value as a string or as a parsed object
         const jsonStr = typeof value === "string" ? value : JSON.stringify(value)
         const asset: Asset = JSON.parse(jsonStr)
 
-        // Validate asset structure
         if (asset && asset.id && asset.expiresAt) {
           if (asset.expiresAt > now) {
             assets.push(asset)
           } else {
-            // Clean up expired asset
             r.hdel(assetsKey(slug), id).catch(() => {})
           }
         }
       } catch (parseError) {
         console.error("[store] Failed to parse asset:", id, parseError)
-        // Don't delete on parse error - might be temporary
       }
     }
 
@@ -221,12 +183,6 @@ export async function getAssets(slug: string): Promise<Asset[]> {
 }
 
 export async function deleteAsset(slug: string, assetId: string): Promise<boolean> {
-  if (isMemoryMode()) {
-    const space = memoryStore.get(slug)
-    if (!space) return false
-    return space.assets.delete(assetId)
-  }
-
   const r = await getRedis()
   const deleted = await r.hdel(assetsKey(slug), assetId)
   return deleted > 0
