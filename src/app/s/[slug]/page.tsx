@@ -325,7 +325,7 @@ export default function SlugSpacePage() {
           <p className="text-xs text-muted-foreground/40">
             Made with ❤️ in Sydney ·{' '}
             <a
-              href="https://github.com/your-username/shoufa"
+              href="https://github.com/liyu1981/shoufa"
               target="_blank"
               rel="noopener noreferrer"
               className="underline hover:text-foreground/60 transition-colors"

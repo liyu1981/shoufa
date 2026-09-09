@@ -93,8 +93,37 @@ export default function HomePage() {
     }
   }
 
+  // JSON-LD structured data for search engines
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    name: "Shoufa",
+    alternateName: "Shoufa — Paste, Share, Disappear",
+    url: process.env.NEXT_PUBLIC_SITE_URL || "https://shoufa.vercel.app",
+    applicationCategory: "UtilitiesApplication",
+    operatingSystem: "Any",
+    description:
+      "Ephemeral clipboard with a time limit. Paste text or images, share a memorable link, and it auto-expires. No signup needed.",
+    offers: {
+      "@type": "Offer",
+      price: "0",
+      priceCurrency: "USD",
+    },
+    featureList: [
+      "Paste text with auto-expiry",
+      "Upload images with self-destructing links",
+      "Memorable shareable links like bright-fox",
+      "No signup or account required",
+      "Works on mobile and desktop",
+    ],
+  }
+
   return (
     <div className="ambient-bg min-h-screen w-full overflow-x-clip">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <AmbientBackground />
 
       <main className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4 py-12">
@@ -231,7 +260,7 @@ export default function HomePage() {
           <p className="text-xs text-muted-foreground/40">
             Made with ❤️ in Sydney ·{' '}
             <a
-              href="https://github.com/your-username/shoufa"
+              href="https://github.com/liyu1981/shoufa"
               target="_blank"
               rel="noopener noreferrer"
               className="underline hover:text-foreground/60 transition-colors"
@@ -240,6 +269,27 @@ export default function HomePage() {
             </a>
           </p>
         </footer>
+
+        {/* SEO: how it works */}
+        <section className="mt-16 max-w-2xl mx-auto px-4 text-center">
+          <h2 className="text-lg font-semibold text-foreground/80 mb-4">
+            How to share text and images that auto-expire
+          </h2>
+          <div className="grid sm:grid-cols-3 gap-6 text-sm text-muted-foreground">
+            <div>
+              <h3 className="font-medium text-foreground/70 mb-1">1. Create a space</h3>
+              <p>Generate a memorable link like bright-fox, or pick your own name.</p>
+            </div>
+            <div>
+              <h3 className="font-medium text-foreground/70 mb-1">2. Paste or upload</h3>
+              <p>Add code snippets, passwords, links, or screenshots. Choose how long it lives — from 1 minute to 1 hour.</p>
+            </div>
+            <div>
+              <h3 className="font-medium text-foreground/70 mb-1">3. Share the link</h3>
+              <p>Anyone with the link can copy the text or download the image. Everything disappears when time runs out.</p>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
   )
