@@ -25,8 +25,15 @@ An ephemeral clipboard with a time limit. Paste text or images, share the link, 
 ## Development
 
 ```bash
+
+## Development
+
+```bash
 # Install dependencies
 pnpm install
+
+# Get a free temporary Upstash Redis (no account needed)
+pnpm redis
 
 # Start dev server (HTTPS, port 3210)
 pnpm dev
@@ -34,13 +41,11 @@ pnpm dev
 # Open https://localhost:3210
 ```
 
-**Note:** Local development uses an in-memory store — no Redis needed. Data resets on server restart, which is fine for ephemeral content.
+**Note:** Local dev uses a real Upstash Redis instance (same as production). Data persists for 3 days. To use in-memory mode instead, comment out the env vars in `.env.local`.
 
 ## Deployment
 
 ### Vercel (Recommended)
-
-Zero-config deployment with Upstash Redis.
 
 1. **Create Upstash Redis:**
    - Go to [Upstash Console](https://console.upstash.com)
