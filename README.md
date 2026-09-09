@@ -4,13 +4,14 @@
 
 An ephemeral clipboard with a time limit. Paste text or images, share the link, and watch it auto-expire.
 
-## Features
+## Use Cases
 
-- 🎨 **Apple Glass Design** — Frosted glass surfaces with ambient animated background
-- ⏱️ **TTL** — Assets expire after 1min–1hr (configurable per paste)
-- 📋 **Easy Copy/Download** — One-click copy text, one-click download images
-- 🎲 **Memorable Slugs** — Auto-generated `adjective-noun` combos (e.g., `bright-fox`, `calm-pond`)
-- 🌙 **Dark Mode** — Automatic light/dark theme support
+- 📋 **Share code snippets** — Paste code and share the link; expires automatically
+- 🔐 **Send passwords** — Share credentials securely; they disappear after viewing
+- 📱 **Transfer between devices** — Paste on phone, copy on desktop (or vice versa)
+- 🖼️ **Quick image sharing** — Upload screenshots or photos with a self-destructing link
+- 🤝 **Team collaboration** — Share quick notes without cluttering chat
+- 🎫 **One-time secrets** — API keys, tokens, or sensitive info that shouldn't persist
 
 ## Tech Stack
 
@@ -18,33 +19,37 @@ An ephemeral clipboard with a time limit. Paste text or images, share the link, 
 - **TypeScript**
 - **Tailwind CSS v4** + Apple glass design system
 - **Jotai** for state management
-- **Upstash Redis** for serverless-compatible storage
+- **Upstash Redis** for serverless storage (Vercel)
+- **In-memory store** for local development
 
-## Quick Start
-
-### Development
+## Development
 
 ```bash
 # Install dependencies
 pnpm install
 
-# Start dev server
+# Start dev server (HTTPS, port 3210)
 pnpm dev
+
+# Open https://localhost:3210
 ```
 
-### Deployment to Vercel
+**Note:** Local development uses an in-memory store — no Redis needed. Data resets on server restart, which is fine for ephemeral content.
 
-1. **Create Upstash Redis**:
+## Deployment
+
+### Vercel (Recommended)
+
+Zero-config deployment with Upstash Redis.
+
+1. **Create Upstash Redis:**
    - Go to [Upstash Console](https://console.upstash.com)
    - Create a new Redis database (free tier: 10,000 commands/day)
    - Copy the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
 
-2. **Deploy to Vercel**:
+2. **Deploy:**
    ```bash
-   # Install Vercel CLI
    pnpm add -g vercel
-
-   # Deploy
    vercel
 
    # Add environment variables
@@ -55,53 +60,64 @@ pnpm dev
    vercel --prod
    ```
 
-3. **Or connect via Vercel Dashboard**:
-   - Push to GitHub
-   - Import project in Vercel
-   - Add environment variables from Upstash
+Or connect via Vercel Dashboard:
+1. Push to GitHub
+2. Import project in Vercel
+3. Add environment variables from Upstash
+
+### Other Platforms (AWS, Google Cloud, DigitalOcean, etc.)
+
+Any platform that supports Node.js will work. You just need a Redis server for storage.
+
+#### 1. Set up a Redis server
+
+**Option A: Managed Redis (easiest)**
+- [Upstash](https://upstash.com) — Serverless, pay-per-request
+- [Redis Cloud](https://redis.com/redis-enterprise/cloud) — Free tier available
+- [Amazon ElastiCache](https://aws.amazon.com/elasticache/) — AWS managed
+
+**Option B: Self-hosted Redis**
+```bash
+# On your server
+sudo apt install redis-server
+sudo systemctl enable redis-server
+
+# Verify it's running
+redis-cli ping
+# Should return: PONG
+```
+
+#### 2. Configure environment variables
+
+Set these on your hosting platform:
+
+```bash
+UPSTASH_REDIS_REST_URL=https://your-redis-instance.com
+UPSTASH_REDIS_REST_TOKEN=your-token
+```
+
+For self-hosted Redis with REST API, use [Lettuce](https://lettuce.io) or [Redis with a REST proxy](https://github.com/nicholasgasior/redis-rest-proxy).
+
+If your Redis uses the standard protocol (not REST), you'll need to modify `src/lib/store.ts` to use a Redis client like `ioredis`.
+
+#### 3. Deploy
+
+```bash
+# Build
+pnpm build
+
+# Start
+pnpm start -p 3000
+```
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `UPSTASH_REDIS_REST_URL` | For storage | Redis REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | For storage | Redis REST token |
 
-## Project Structure
-
-```
-shoufa/
-├── src/
-│   ├── app/
-│   │   ├── page.tsx              ← Landing: join or create slug
-│   │   ├── s/[slug]/page.tsx     ← Slug space: paste, view, copy, download
-│   │   └── api/
-│   │       ├── slugs/route.ts    ← POST: create slug
-│   │       └── [slug]/
-│   │           ├── route.ts      ← DELETE: destroy slug
-│   │           ├── exists/       ← GET: check if slug exists
-│   │           └── assets/       ← GET/POST/DELETE: manage assets
-│   ├── components/
-│   │   ├── AmbientBackground.tsx ← Animated canvas blobs
-│   │   ├── GlassCard.tsx         ← Glass-control wrapper
-│   │   ├── PasteZone.tsx         ← Ctrl+V / drag-drop zone
-│   │   ├── AssetCard.tsx         ← Text/Image display
-│   │   └── CountdownTimer.tsx    ← TTL countdown
-│   └── lib/
-│       ├── slugs.ts              ← Slug generator (40k+ combos)
-│       ├── store.ts              ← Upstash Redis store
-│       └── utils.ts              ← cn() helper
-```
-
-## API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/slugs` | Create slug (auto or custom) |
-| `GET` | `/api/[slug]/assets` | List all assets |
-| `POST` | `/api/[slug]/assets` | Add text/image |
-| `DELETE` | `/api/[slug]/assets/[id]` | Delete asset |
-| `DELETE` | `/api/[slug]` | Destroy slug |
+**Without these variables**, the app uses in-memory storage (data resets on restart).
 
 ## License
 
