@@ -17,7 +17,16 @@ import {
   Timer,
   RefreshCw,
   Link2,
+  AlertTriangle,
 } from "lucide-react"
+import { cn } from "@/lib/utils"
+
+interface SpaceStatus {
+  exists: boolean
+  disappearing: boolean
+  disappearAt: number | null
+  assetsCount: number
+}
 
 export default function SlugSpacePage() {
   const router = useRouter()
@@ -31,6 +40,8 @@ export default function SlugSpacePage() {
   const [clearing, setClearing] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const [ttl, setTtl] = useState(300) // default 5 minutes
+  const [spaceStatus, setSpaceStatus] = useState<SpaceStatus | null>(null)
+  const [remainingTime, setRemainingTime] = useState<number>(0)
 
   // Fetch assets
   const fetchAssets = useCallback(async () => {
@@ -50,12 +61,52 @@ export default function SlugSpacePage() {
     }
   }, [slug])
 
+  // Fetch space status
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/${slug}/status`)
+      const data = await res.json()
+      if (data.ok) {
+        setSpaceStatus(data.data)
+      }
+    } catch {
+      // Ignore errors
+    }
+  }, [slug])
+
   // Initial fetch + polling
   useEffect(() => {
     fetchAssets()
-    const interval = setInterval(fetchAssets, 2000)
+    fetchStatus()
+    const interval = setInterval(() => {
+      fetchAssets()
+      fetchStatus()
+    }, 2000)
     return () => clearInterval(interval)
-  }, [fetchAssets])
+  }, [fetchAssets, fetchStatus])
+
+  // Update remaining time for disappearing countdown
+  useEffect(() => {
+    if (!spaceStatus?.disappearing || !spaceStatus.disappearAt) {
+      setRemainingTime(0)
+      return
+    }
+
+    const updateRemaining = () => {
+      const now = Date.now()
+      const remaining = Math.max(0, spaceStatus.disappearAt! - now)
+      setRemainingTime(remaining)
+
+      if (remaining <= 0) {
+        // Space has disappeared, go home
+        router.push("/")
+      }
+    }
+
+    updateRemaining()
+    const interval = setInterval(updateRemaining, 1000)
+    return () => clearInterval(interval)
+  }, [spaceStatus, router])
 
   // Copy link
   const handleCopyLink = useCallback(async () => {
@@ -73,20 +124,31 @@ export default function SlugSpacePage() {
         await fetch(`/api/${slug}/assets/${asset.id}`, { method: "DELETE" })
       }
       setAssets([])
+      fetchStatus() // Refresh status after clearing
     } finally {
       setClearing(false)
     }
-  }, [slug, assets])
+  }, [slug, assets, fetchStatus])
 
   // Asset deleted
   const handleAssetDeleted = useCallback((id: string) => {
     setAssets((prev) => prev.filter((a) => a.id !== id))
-  }, [])
+    fetchStatus() // Refresh status after deleting
+  }, [fetchStatus])
 
   // Asset added (refetch)
   const handleAssetAdded = useCallback(() => {
     fetchAssets()
-  }, [fetchAssets])
+    fetchStatus()
+  }, [fetchAssets, fetchStatus])
+
+  // Format remaining time
+  const formatRemaining = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000)
+    const minutes = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${minutes}:${secs.toString().padStart(2, "0")}`
+  }
 
   // Not found
   if (notFound) {
@@ -150,7 +212,7 @@ export default function SlugSpacePage() {
             </button>
 
             <button
-              onClick={fetchAssets}
+              onClick={() => { fetchAssets(); fetchStatus(); }}
               className="p-2 rounded-lg hover:bg-foreground/5 transition-all"
               title={t("space.refresh")}
             >
@@ -173,6 +235,38 @@ export default function SlugSpacePage() {
 
       {/* Main content */}
       <main className="relative z-10 pt-20 pb-8 px-4 max-w-2xl mx-auto">
+        {/* Disappearing warning banner */}
+        {spaceStatus?.disappearing && remainingTime > 0 && (
+          <div className={cn(
+            "mb-4 p-4 rounded-xl border transition-all",
+            "bg-orange-500/10 border-orange-500/30",
+            remainingTime < 60 && "bg-destructive/10 border-destructive/30 animate-pulse"
+          )}>
+            <div className="flex items-center gap-3">
+              <AlertTriangle className={cn(
+                "w-5 h-5 shrink-0",
+                remainingTime < 60 ? "text-destructive" : "text-orange-500"
+              )} />
+              <div className="flex-1">
+                <p className="text-sm font-medium">
+                  {remainingTime < 60
+                    ? "Space will disappear soon!"
+                    : "Space is empty and will disappear"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Paste something to keep it alive, or it will be deleted in{" "}
+                  <span className={cn(
+                    "font-mono font-bold",
+                    remainingTime < 60 ? "text-destructive" : "text-orange-500"
+                  )}>
+                    {formatRemaining(remainingTime)}
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* TTL selector */}
         <div className="flex items-center gap-2 mb-4">
           <Timer className="w-4 h-4 text-muted-foreground" />
@@ -201,7 +295,7 @@ export default function SlugSpacePage() {
             <div className="text-center py-12">
               <RefreshCw className="w-6 h-6 text-muted-foreground animate-spin mx-auto" />
             </div>
-          ) : assets.length === 0 ? (
+          ) : assets.length === 0 && !spaceStatus?.disappearing ? (
             <div className="text-center py-12">
               <p className="text-sm text-muted-foreground">
                 {t("space.empty")}

@@ -20,8 +20,12 @@ export interface Asset {
 export interface SlugMeta {
   slug: string
   createdAt: number
-  [key: string]: string | number
+  emptySince?: number    // Timestamp when space became empty (for 15min grace period)
+  [key: string]: string | number | undefined
 }
+
+// Grace period: 15 minutes after last asset is removed
+export const SPACE_GRACE_PERIOD = 15 * 60 // seconds
 
 // ============================================================
 // Mode detection
@@ -40,7 +44,6 @@ let upstashRedis: any = null
 
 async function getRedis() {
   if (isUpstashRedis()) {
-    // Production: use Upstash Redis
     if (!upstashRedis) {
       const { Redis } = await import("@upstash/redis")
       upstashRedis = new Redis({
@@ -50,7 +53,6 @@ async function getRedis() {
     }
     return upstashRedis
   } else {
-    // Development: use mock Redis (emulates real commands)
     if (!mockRedis) {
       mockRedis = getRedisMock()
     }
@@ -63,7 +65,7 @@ const slugKey = (slug: string) => `slug:${slug}`
 const assetsKey = (slug: string) => `slug:${slug}:assets`
 
 // ============================================================
-// Unified API (works with both mock and real Redis)
+// Unified API
 // ============================================================
 
 export async function slugExists(slug: string): Promise<boolean> {
@@ -77,10 +79,8 @@ export async function createSlug(slug: string): Promise<SlugMeta> {
   const meta: SlugMeta = { slug, createdAt: Date.now() }
 
   if (r instanceof RedisMock) {
-    // Mock: use ioredis-style hset with multiple args
     await r.hset(slugKey(slug), "slug", slug, "createdAt", String(meta.createdAt))
   } else {
-    // Upstash: use object-style hset
     await r.hset(slugKey(slug), meta)
   }
 
@@ -94,11 +94,16 @@ export async function getSlug(slug: string): Promise<SlugMeta | null> {
 
   if (!meta || Object.keys(meta).length === 0) return null
 
-  // Normalize: ensure consistent types
-  return {
+  const result: SlugMeta = {
     slug: String(meta.slug),
     createdAt: Number(meta.createdAt),
-  } as SlugMeta
+  }
+
+  if (meta.emptySince) {
+    result.emptySince = Number(meta.emptySince)
+  }
+
+  return result
 }
 
 export async function deleteSlug(slug: string): Promise<boolean> {
@@ -106,6 +111,49 @@ export async function deleteSlug(slug: string): Promise<boolean> {
   const existed = await r.exists(slugKey(slug))
   await r.del(slugKey(slug), assetsKey(slug))
   return existed === 1
+}
+
+/**
+ * Check if space is in "disappearing" state (empty but within grace period)
+ */
+export async function getSpaceStatus(slug: string): Promise<{
+  exists: boolean
+  disappearing: boolean
+  disappearAt: number | null
+  assetsCount: number
+}> {
+  const r = await getRedis()
+  const exists = await r.exists(slugKey(slug))
+
+  if (!exists) {
+    return { exists: false, disappearing: false, disappearAt: null, assetsCount: 0 }
+  }
+
+  const raw = await r.hgetall(assetsKey(slug))
+  const assetCount = raw ? Object.keys(raw).length : 0
+
+  if (assetCount === 0) {
+    // Check emptySince
+    const meta = await r.hgetall(slugKey(slug))
+    const emptySince = meta?.emptySince ? Number(meta.emptySince) : null
+
+    if (emptySince) {
+      const disappearAt = emptySince + SPACE_GRACE_PERIOD * 1000
+      return {
+        exists: true,
+        disappearing: true,
+        disappearAt,
+        assetsCount: 0,
+      }
+    }
+  }
+
+  return {
+    exists: true,
+    disappearing: false,
+    disappearAt: null,
+    assetsCount: assetCount,
+  }
 }
 
 export async function addAsset(
@@ -119,7 +167,7 @@ export async function addAsset(
 
   // Validate image size
   if (asset.type === "image" && asset.data) {
-    const sizeInBytes = Math.ceil(asset.data.length * 3 / 4) // Approximate base64 size
+    const sizeInBytes = Math.ceil(asset.data.length * 3 / 4)
     if (sizeInBytes > config.maxImageSize) {
       console.error("[store] Image too large:", sizeInBytes, ">", config.maxImageSize)
       return null
@@ -145,14 +193,21 @@ export async function addAsset(
     const keyTTL = Math.ceil(asset.ttl) + 60
 
     if (r instanceof RedisMock) {
-      // Mock: use ioredis-style hset
       await r.hset(assetsKey(slug), id, assetJson)
     } else {
-      // Upstash: use object-style hset
       await r.hset(assetsKey(slug), { [id]: assetJson })
     }
 
     await r.expire(assetsKey(slug), keyTTL)
+
+    // Clear emptySince since we now have an asset
+    if (r instanceof RedisMock) {
+      await r.hdel(slugKey(slug), "emptySince")
+    } else {
+      await r.hset(slugKey(slug), { emptySince: "" })
+    }
+
+    // Extend slug TTL
     await r.expire(slugKey(slug), Math.max(keyTTL, 3600))
 
     return fullAsset
@@ -201,6 +256,25 @@ export async function getAssets(slug: string): Promise<Asset[]> {
 export async function deleteAsset(slug: string, assetId: string): Promise<boolean> {
   const r = await getRedis()
   const deleted = await r.hdel(assetsKey(slug), assetId)
+
+  if (deleted > 0) {
+    // Check if space is now empty
+    const remaining = await r.hgetall(assetsKey(slug))
+    const assetCount = remaining ? Object.keys(remaining).length : 0
+
+    if (assetCount === 0) {
+      // Space is now empty - start grace period
+      const now = Date.now()
+      if (r instanceof RedisMock) {
+        await r.hset(slugKey(slug), "emptySince", String(now))
+      } else {
+        await r.hset(slugKey(slug), { emptySince: now })
+      }
+      // Set TTL for the grace period + buffer
+      await r.expire(slugKey(slug), SPACE_GRACE_PERIOD + 60)
+    }
+  }
+
   return deleted > 0
 }
 
