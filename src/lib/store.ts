@@ -3,6 +3,7 @@
 
 import { nanoid } from "nanoid"
 import { getRedisMock, RedisMock } from "./redis-mock"
+import { limits } from "./config"
 
 export interface Asset {
   id: string
@@ -111,13 +112,28 @@ export async function addAsset(
   slug: string,
   asset: Omit<Asset, "id" | "createdAt" | "expiresAt">
 ): Promise<Asset | null> {
+  const config = limits()
+
+  // Validate TTL
+  const ttl = Math.min(asset.ttl, config.maxTtl)
+
+  // Validate image size
+  if (asset.type === "image" && asset.data) {
+    const sizeInBytes = Math.ceil(asset.data.length * 3 / 4) // Approximate base64 size
+    if (sizeInBytes > config.maxImageSize) {
+      console.error("[store] Image too large:", sizeInBytes, ">", config.maxImageSize)
+      return null
+    }
+  }
+
   const id = nanoid(12)
   const now = Date.now()
   const fullAsset: Asset = {
     ...asset,
+    ttl,
     id,
     createdAt: now,
-    expiresAt: now + asset.ttl * 1000,
+    expiresAt: now + ttl * 1000,
   }
 
   try {
