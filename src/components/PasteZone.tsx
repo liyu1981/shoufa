@@ -1,8 +1,8 @@
 "use client"
 
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useRef, useState, useEffect } from "react"
 import { cn } from "@/lib/utils"
-import { Clipboard, Upload, Check } from "lucide-react"
+import { Clipboard, Upload, Check, Send } from "lucide-react"
 
 interface PasteZoneProps {
   slug: string
@@ -10,13 +10,25 @@ interface PasteZoneProps {
   ttl: number
 }
 
+function isMobile(): boolean {
+  if (typeof navigator === "undefined") return false
+  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+}
+
 export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [lastAction, setLastAction] = useState<"text" | "image" | null>(null)
+  const [isMobileDevice, setIsMobileDevice] = useState(false)
+  const [textInput, setTextInput] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const handleTextPaste = useCallback(async (text: string) => {
+  useEffect(() => {
+    setIsMobileDevice(isMobile())
+  }, [])
+
+  const handleTextSubmit = useCallback(async (text: string) => {
     if (!text.trim()) return
     setUploading(true)
     try {
@@ -27,6 +39,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
       })
       if (res.ok) {
         setLastAction("text")
+        setTextInput("")
         setTimeout(() => setLastAction(null), 1500)
         onAssetAdded()
       }
@@ -55,8 +68,13 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     }
   }, [slug, ttl, onAssetAdded])
 
-  // Handle paste events on the zone
+  // Handle paste events on the zone (desktop Ctrl+V)
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+    // If textarea is focused, let the native paste happen
+    if (document.activeElement === textareaRef.current) {
+      return // Let onChange handle it
+    }
+
     e.preventDefault()
 
     // Check for images in clipboard
@@ -71,12 +89,12 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
       }
     }
 
-    // Fall back to text
+    // Fall back to text — put it in the textarea
     const text = e.clipboardData.getData("text/plain")
     if (text) {
-      await handleTextPaste(text)
+      setTextInput(text)
     }
-  }, [handleTextPaste, handleImageUpload])
+  }, [handleImageUpload])
 
   // Handle drag and drop
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -100,12 +118,11 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
       return
     }
 
-    // Try text from drop
     const text = e.dataTransfer.getData("text/plain")
     if (text) {
-      await handleTextPaste(text)
+      setTextInput(text)
     }
-  }, [handleTextPaste, handleImageUpload])
+  }, [handleImageUpload])
 
   // Handle file input
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -118,21 +135,20 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     }
   }, [handleImageUpload])
 
+  const canSubmit = textInput.trim().length > 0
+
   return (
     <div
       onPaste={handlePaste}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      tabIndex={0}
       className={cn(
-        "glass-control rounded-2xl p-8 cursor-pointer transition-all duration-200",
-        "flex flex-col items-center justify-center gap-4 min-h-[180px]",
-        "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background",
+        "glass-control rounded-2xl p-6 transition-all duration-200",
+        "flex flex-col gap-4",
         isDragging && "ring-2 ring-ring ring-offset-2 ring-offset-background brightness-[1.06]",
         uploading && "opacity-60 pointer-events-none"
       )}
-      onClick={() => fileInputRef.current?.click()}
     >
       <input
         ref={fileInputRef}
@@ -142,17 +158,18 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
         onChange={handleFileChange}
       />
 
-      {lastAction === "text" ? (
-        <Check className="w-10 h-10 text-success" />
-      ) : lastAction === "image" ? (
-        <Check className="w-10 h-10 text-success" />
-      ) : uploading ? (
-        <Upload className="w-10 h-10 text-muted-foreground animate-pulse" />
-      ) : (
-        <Clipboard className="w-10 h-10 text-muted-foreground" />
-      )}
+      {/* Status indicator */}
+      <div className="flex items-center gap-3">
+        {lastAction === "text" ? (
+          <Check className="w-5 h-5 text-success shrink-0" />
+        ) : lastAction === "image" ? (
+          <Check className="w-5 h-5 text-success shrink-0" />
+        ) : uploading ? (
+          <Upload className="w-5 h-5 text-muted-foreground animate-pulse shrink-0" />
+        ) : (
+          <Clipboard className="w-5 h-5 text-muted-foreground shrink-0" />
+        )}
 
-      <div className="text-center">
         {lastAction ? (
           <p className="text-sm font-medium text-success">
             {lastAction === "text" ? "Text saved!" : "Image uploaded!"}
@@ -160,15 +177,63 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
         ) : uploading ? (
           <p className="text-sm text-muted-foreground">Uploading...</p>
         ) : (
-          <>
-            <p className="text-sm font-medium text-foreground/80">
-              Ctrl+V to paste text or image
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              or click to upload · drag & drop images
-            </p>
-          </>
+          <p className="text-sm text-muted-foreground">
+            {isMobileDevice ? "Type or paste text, or upload an image" : "Type, paste (Ctrl+V), or upload an image"}
+          </p>
         )}
+      </div>
+
+      {/* Text input area */}
+      <div className="flex gap-2">
+        <textarea
+          ref={textareaRef}
+          value={textInput}
+          onChange={(e) => setTextInput(e.target.value)}
+          onKeyDown={(e) => {
+            // Submit on Cmd+Enter (Mac) or Ctrl+Enter (others)
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              if (canSubmit) handleTextSubmit(textInput)
+            }
+          }}
+          placeholder="Paste or type text here..."
+          rows={2}
+          className="flex-1 px-4 py-3 rounded-xl bg-foreground/5 border border-border/50
+                     text-foreground placeholder:text-muted-foreground/50 text-sm
+                     focus:outline-none focus:ring-2 focus:ring-ring/50
+                     transition-all duration-200 resize-none"
+        />
+
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={() => handleTextSubmit(textInput)}
+            disabled={!canSubmit}
+            className={cn(
+              "px-3 py-2 rounded-xl transition-all duration-150 flex items-center justify-center",
+              canSubmit
+                ? "bg-primary text-primary-foreground hover:brightness-110 active:scale-95"
+                : "bg-foreground/5 text-muted-foreground/40 cursor-not-allowed"
+            )}
+            title="Submit (⌘+Enter)"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-2 rounded-xl bg-foreground/5 text-muted-foreground
+                       hover:bg-foreground/10 hover:text-foreground
+                       active:scale-95 transition-all duration-150
+                       flex items-center justify-center"
+            title="Upload image"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+              <circle cx="9" cy="9" r="2"/>
+              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   )

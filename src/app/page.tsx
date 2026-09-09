@@ -165,39 +165,48 @@ export default function HomePage() {
               Create a space
             </label>
 
-            <button
-              onClick={handleCreate}
-              disabled={creating}
-              className="w-full px-4 py-3 rounded-xl glass-control
-                         font-medium text-foreground/90
-                         hover:brightness-[1.06] active:scale-[0.98]
-                         disabled:opacity-40 disabled:cursor-not-allowed
-                         transition-all duration-150
-                         flex items-center justify-center gap-2"
-            >
-              {creating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <>
-                  <Zap className="w-4 h-4" />
-                  Generate random slug
-                </>
-              )}
-            </button>
-
-            {customSlug.trim() && (
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customSlug}
+                onChange={(e) => {
+                  setCustomSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                  setError(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    if (customSlug.trim()) {
+                      handleCreateCustom()
+                    } else {
+                      handleCreate()
+                    }
+                  }
+                }}
+                placeholder="slug"
+                className="flex-1 px-4 py-2.5 rounded-xl bg-foreground/5 border border-border/50
+                           text-foreground placeholder:text-muted-foreground/50
+                           focus:outline-none focus:ring-2 focus:ring-ring/50
+                           transition-all duration-200"
+              />
               <button
-                onClick={handleCreateCustom}
+                onClick={customSlug.trim() ? handleCreateCustom : handleCreate}
                 disabled={creating}
-                className="w-full px-4 py-2.5 rounded-xl
-                           text-sm text-muted-foreground hover:text-foreground
-                           hover:bg-foreground/5
+                className="px-4 py-2.5 rounded-xl glass-control text-foreground/90
+                           hover:brightness-[1.06] active:scale-95
                            disabled:opacity-40 disabled:cursor-not-allowed
-                           transition-all duration-150"
+                           transition-all duration-150 flex items-center gap-2"
               >
-                Create &quot;{customSlug}&quot; instead
+                {creating ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4" />
+                    generate
+                  </>
+                )}
               </button>
-            )}
+            </div>
           </div>
 
           {/* Error */}
