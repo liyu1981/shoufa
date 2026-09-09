@@ -1,6 +1,8 @@
 {
   "framework": "nextjs",
   "regions": ["iad1"],
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm build",
   "functions": {
     "app/api/**/*.ts": {
       "maxDuration": 10
