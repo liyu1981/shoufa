@@ -1,69 +1,216 @@
-import Image from "next/image";
+"use client"
 
-export default function Home() {
+import { useState, useCallback } from "react"
+import { useRouter } from "next/navigation"
+import AmbientBackground from "@/components/AmbientBackground"
+import { GlassCard } from "@/components/GlassCard"
+import { Zap, Link2, ArrowRight, Loader2 } from "lucide-react"
+
+export default function HomePage() {
+  const router = useRouter()
+  const [customSlug, setCustomSlug] = useState("")
+  const [joining, setJoining] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Join existing slug
+  const handleJoin = useCallback(async () => {
+    const slug = customSlug.trim().toLowerCase()
+    if (!slug) return
+
+    setJoining(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/${slug}/assets`)
+      const data = await res.json()
+      if (data.ok) {
+        router.push(`/s/${slug}`)
+      } else {
+        setError("Space not found. Create a new one?")
+      }
+    } catch {
+      setError("Failed to check space")
+    } finally {
+      setJoining(false)
+    }
+  }, [customSlug, router])
+
+  // Create new slug
+  const handleCreate = useCallback(async () => {
+    setCreating(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/slugs", { method: "POST" })
+      const data = await res.json()
+      if (data.ok) {
+        router.push(`/s/${data.data.slug}`)
+      } else {
+        setError(data.error || "Failed to create space")
+      }
+    } catch {
+      setError("Failed to create space")
+    } finally {
+      setCreating(false)
+    }
+  }, [router])
+
+  // Create custom slug
+  const handleCreateCustom = useCallback(async () => {
+    const slug = customSlug.trim().toLowerCase()
+    if (!slug) return
+
+    setCreating(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/slugs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        router.push(`/s/${slug}`)
+      } else {
+        setError(data.error || "Failed to create space")
+      }
+    } catch {
+      setError("Failed to create space")
+    } finally {
+      setCreating(false)
+    }
+  }, [customSlug, router])
+
+  // Handle Enter key
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault()
+      if (customSlug.trim()) {
+        handleJoin()
+      }
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <div className="ambient-bg min-h-screen w-full overflow-x-clip">
+      <AmbientBackground />
+
+      <main className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4 py-12">
+        {/* Logo / Title */}
+        <div className="text-center mb-10">
+          <h1 className="text-5xl font-bold tracking-tight text-foreground mb-3">
+            Shoufa
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-lg text-muted-foreground max-w-md mx-auto">
+            Paste. Share. Disappear.
+          </p>
+          <p className="text-sm text-muted-foreground/70 mt-1">
+            Ephemeral clipboard with a time limit
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+
+        {/* Main card */}
+        <GlassCard className="w-full max-w-md space-y-6">
+          {/* Join existing */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground/80 flex items-center gap-2">
+              <Link2 className="w-4 h-4" />
+              Join a space
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customSlug}
+                onChange={(e) => {
+                  setCustomSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+                  setError(null)
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder="Enter slug (e.g. warm-fox)"
+                className="flex-1 px-4 py-2.5 rounded-xl bg-foreground/5 border border-border/50
+                           text-foreground placeholder:text-muted-foreground/50
+                           focus:outline-none focus:ring-2 focus:ring-ring/50
+                           transition-all duration-200"
+              />
+              <button
+                onClick={handleJoin}
+                disabled={joining || !customSlug.trim()}
+                className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground
+                           hover:brightness-110 active:scale-95
+                           disabled:opacity-40 disabled:cursor-not-allowed
+                           transition-all duration-150 flex items-center gap-2"
+              >
+                {joining ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="w-4 h-4" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-border/30" />
+            </div>
+            <div className="relative flex justify-center text-xs">
+              <span className="bg-card px-3 text-muted-foreground">or</span>
+            </div>
+          </div>
+
+          {/* Create new */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-foreground/80 flex items-center gap-2">
+              <Zap className="w-4 h-4" />
+              Create a space
+            </label>
+
+            <button
+              onClick={handleCreate}
+              disabled={creating}
+              className="w-full px-4 py-3 rounded-xl glass-control
+                         font-medium text-foreground/90
+                         hover:brightness-[1.06] active:scale-[0.98]
+                         disabled:opacity-40 disabled:cursor-not-allowed
+                         transition-all duration-150
+                         flex items-center justify-center gap-2"
+            >
+              {creating ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <>
+                  <Zap className="w-4 h-4" />
+                  Generate random slug
+                </>
+              )}
+            </button>
+
+            {customSlug.trim() && (
+              <button
+                onClick={handleCreateCustom}
+                disabled={creating}
+                className="w-full px-4 py-2.5 rounded-xl
+                           text-sm text-muted-foreground hover:text-foreground
+                           hover:bg-foreground/5
+                           disabled:opacity-40 disabled:cursor-not-allowed
+                           transition-all duration-150"
+              >
+                Create &quot;{customSlug}&quot; instead
+              </button>
+            )}
+          </div>
+
+          {/* Error */}
+          {error && (
+            <p className="text-sm text-destructive text-center">{error}</p>
+          )}
+        </GlassCard>
+
+        {/* Footer */}
+        <p className="text-xs text-muted-foreground/50 mt-8 text-center">
+          Content auto-expires after 5 minutes · No accounts needed
+        </p>
       </main>
     </div>
-  );
+  )
 }

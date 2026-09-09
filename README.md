@@ -1,36 +1,108 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Shoufa
 
-## Getting Started
+**Paste. Share. Disappear.**
 
-First, run the development server:
+An ephemeral clipboard with a time limit. Paste text or images, share the link, and watch it auto-expire.
+
+## Features
+
+- 🎨 **Apple Glass Design** — Frosted glass surfaces with ambient animated background
+- ⏱️ **TTL** — Assets expire after 1min–1hr (configurable per paste)
+- 📋 **Easy Copy/Download** — One-click copy text, one-click download images
+- 🎲 **Memorable Slugs** — Auto-generated `adjective-noun` combos (e.g., `bright-fox`, `calm-pond`)
+- 🌙 **Dark Mode** — Automatic light/dark theme support
+
+## Tech Stack
+
+- **Next.js 16** (App Router)
+- **TypeScript**
+- **Tailwind CSS v4** + Apple glass design system
+- **Jotai** for state management
+- **Upstash Redis** for serverless-compatible storage
+
+## Quick Start
+
+### Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+# Install dependencies
+pnpm install
+
+# Start dev server
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Deployment to Vercel
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. **Create Upstash Redis**:
+   - Go to [Upstash Console](https://console.upstash.com)
+   - Create a new Redis database (free tier: 10,000 commands/day)
+   - Copy the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+2. **Deploy to Vercel**:
+   ```bash
+   # Install Vercel CLI
+   pnpm add -g vercel
 
-## Learn More
+   # Deploy
+   vercel
 
-To learn more about Next.js, take a look at the following resources:
+   # Add environment variables
+   vercel env add UPSTASH_REDIS_REST_URL
+   vercel env add UPSTASH_REDIS_REST_TOKEN
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+   # Deploy to production
+   vercel --prod
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+3. **Or connect via Vercel Dashboard**:
+   - Push to GitHub
+   - Import project in Vercel
+   - Add environment variables from Upstash
 
-## Deploy on Vercel
+### Environment Variables
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Variable | Description |
+|----------|-------------|
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project Structure
+
+```
+shoufa/
+├── src/
+│   ├── app/
+│   │   ├── page.tsx              ← Landing: join or create slug
+│   │   ├── s/[slug]/page.tsx     ← Slug space: paste, view, copy, download
+│   │   └── api/
+│   │       ├── slugs/route.ts    ← POST: create slug
+│   │       └── [slug]/
+│   │           ├── route.ts      ← DELETE: destroy slug
+│   │           ├── exists/       ← GET: check if slug exists
+│   │           └── assets/       ← GET/POST/DELETE: manage assets
+│   ├── components/
+│   │   ├── AmbientBackground.tsx ← Animated canvas blobs
+│   │   ├── GlassCard.tsx         ← Glass-control wrapper
+│   │   ├── PasteZone.tsx         ← Ctrl+V / drag-drop zone
+│   │   ├── AssetCard.tsx         ← Text/Image display
+│   │   └── CountdownTimer.tsx    ← TTL countdown
+│   └── lib/
+│       ├── slugs.ts              ← Slug generator (40k+ combos)
+│       ├── store.ts              ← Upstash Redis store
+│       └── utils.ts              ← cn() helper
+```
+
+## API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/slugs` | Create slug (auto or custom) |
+| `GET` | `/api/[slug]/assets` | List all assets |
+| `POST` | `/api/[slug]/assets` | Add text/image |
+| `DELETE` | `/api/[slug]/assets/[id]` | Delete asset |
+| `DELETE` | `/api/[slug]` | Destroy slug |
+
+## License
+
+MIT

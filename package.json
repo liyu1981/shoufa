@@ -3,15 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3210 --webpack --experimental-https --experimental-https-key ./mkcert/key.pem --experimental-https-cert ./mkcert/cert.pem",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@upstash/redis": "^1.38.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "jotai": "^2.20.3",
+    "lucide-react": "^1.42.0",
+    "nanoid": "^6.0.1",
     "next": "16.3.4",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
