@@ -38,6 +38,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, data: { slug } })
   } catch (error) {
     console.error("POST /api/slugs error:", error)
+    console.error("Error details:", {
+      message: error instanceof Error ? error.message : "Unknown error",
+      stack: error instanceof Error ? error.stack : undefined,
+      redisUrl: process.env.UPSTASH_REDIS_REST_URL ? "SET" : "NOT SET",
+      redisToken: process.env.UPSTASH_REDIS_REST_TOKEN ? "SET" : "NOT SET",
+    })
     return NextResponse.json(
       { ok: false, error: "Failed to create slug" },
       { status: 500 }
