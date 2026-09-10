@@ -41,7 +41,7 @@ export default function SlugSpacePage() {
   const [slugCopied, setSlugCopied] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [notFound, setNotFound] = useState(false)
-  const [ttl, setTtl] = useState(300) // default 5 minutes
+  const [ttl, setTtl] = useState(900) // default 15 minutes
   const [spaceStatus, setSpaceStatus] = useState<SpaceStatus | null>(null)
   const [remainingTime, setRemainingTime] = useState<number>(0)
 
