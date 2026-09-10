@@ -45,14 +45,17 @@ let upstashRedis: any = null
 async function getRedis() {
   if (isUpstashRedis()) {
     if (!upstashRedis) {
+      console.log("[Redis] Connecting to Upstash/Layerbase...", process.env.UPSTASH_REDIS_REST_URL)
       const { Redis } = await import("@upstash/redis")
       upstashRedis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL!,
         token: process.env.UPSTASH_REDIS_REST_TOKEN!,
       })
+      console.log("[Redis] Connected successfully")
     }
     return upstashRedis
   } else {
+    console.log("[Redis] Using mock (UPSTASH_REDIS_REST_URL not set)")
     if (!mockRedis) {
       mockRedis = getRedisMock()
     }
@@ -75,17 +78,23 @@ export async function slugExists(slug: string): Promise<boolean> {
 }
 
 export async function createSlug(slug: string): Promise<SlugMeta> {
+  console.log("[createSlug] slug:", slug)
   const r = await getRedis()
   const meta: SlugMeta = { slug, createdAt: Date.now() }
 
-  if (r instanceof RedisMock) {
-    await r.hset(slugKey(slug), "slug", slug, "createdAt", String(meta.createdAt))
-  } else {
-    await r.hset(slugKey(slug), meta)
+  try {
+    if (r instanceof RedisMock) {
+      await r.hset(slugKey(slug), "slug", slug, "createdAt", String(meta.createdAt))
+    } else {
+      await r.hset(slugKey(slug), meta)
+    }
+    await r.expire(slugKey(slug), 3600)
+    console.log("[createSlug] OK")
+    return meta
+  } catch (error) {
+    console.error("[createSlug] FAILED:", error)
+    throw error
   }
-
-  await r.expire(slugKey(slug), 3600)
-  return meta
 }
 
 export async function getSlug(slug: string): Promise<SlugMeta | null> {
