@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { ThemeProvider } from "@/components/ThemeProvider"
 import { I18nProvider } from "@/components/I18nProvider"
+import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration"
 import { GoogleAnalytics } from "@next/third-parties/google"
 import "./globals.css"
 
@@ -90,6 +91,7 @@ export default function RootLayout({
           </ThemeProvider>
         </I18nProvider>
         <GoogleAnalytics gaId={gaId} />
+        <ServiceWorkerRegistration />
       </body>
     </html>
   )

@@ -9,6 +9,7 @@ import { PasteZone } from "@/components/PasteZone"
 import { AssetCard } from "@/components/AssetCard"
 import { ThemeToggle } from "@/components/ThemeToggle"
 import type { Asset } from "@/lib/atoms"
+import { addRecentSlug } from "@/lib/recent-slugs"
 import {
   Copy,
   Check,
@@ -37,11 +38,19 @@ export default function SlugSpacePage() {
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [slugCopied, setSlugCopied] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const [ttl, setTtl] = useState(300) // default 5 minutes
   const [spaceStatus, setSpaceStatus] = useState<SpaceStatus | null>(null)
   const [remainingTime, setRemainingTime] = useState<number>(0)
+
+  // Save slug to recent on mount
+  useEffect(() => {
+    if (slug) {
+      addRecentSlug(slug)
+    }
+  }, [slug])
 
   // Fetch assets
   const fetchAssets = useCallback(async () => {
@@ -113,7 +122,9 @@ export default function SlugSpacePage() {
     const url = `${window.location.origin}/s/${slug}`
     await navigator.clipboard.writeText(url)
     setCopied(true)
+    setSlugCopied(true)
     setTimeout(() => setCopied(false), 1500)
+    setTimeout(() => setSlugCopied(false), 1500)
   }, [slug])
 
   // Clear all assets
@@ -188,9 +199,20 @@ export default function SlugSpacePage() {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <h1 className="text-sm font-semibold tracking-tight truncate max-w-[200px]">
-              {slug}
-            </h1>
+            <button
+              onClick={handleCopyLink}
+              className="flex items-center gap-1.5 px-2 py-1 -ml-2 rounded-lg hover:bg-foreground/5 transition-all group"
+              title={t("space.copyLink")}
+            >
+              <h1 className="text-sm font-semibold tracking-tight truncate max-w-[200px] group-hover:text-primary transition-colors">
+                {slug}
+              </h1>
+              {slugCopied ? (
+                <Check className="w-3.5 h-3.5 text-success" />
+              ) : (
+                <Copy className="w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
+              )}
+            </button>
           </div>
 
           <div className="flex items-center gap-1">
