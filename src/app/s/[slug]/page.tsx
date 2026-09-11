@@ -39,6 +39,12 @@ export default function SlugSpacePage() {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [slugCopied, setSlugCopied] = useState(false)
+  const [host, setHost] = useState("")
+
+  // Get host on mount
+  useEffect(() => {
+    setHost(window.location.host)
+  }, [])
   const [clearing, setClearing] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const [ttl, setTtl] = useState(900) // default 15 minutes
@@ -127,6 +133,9 @@ export default function SlugSpacePage() {
     setTimeout(() => setSlugCopied(false), 1500)
   }, [slug])
 
+  // Get display URL
+  const displayUrl = host ? `${host}/s/${slug}` : `/s/${slug}`
+
   // Clear all assets
   const handleClearAll = useCallback(async () => {
     setClearing(true)
@@ -199,39 +208,27 @@ export default function SlugSpacePage() {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <button
-              onClick={handleCopyLink}
-              className="flex items-center gap-1.5 px-2 py-1 -ml-2 rounded-lg hover:bg-foreground/5 transition-all group"
-              title={t("space.copyLink")}
-            >
-              <h1 className="text-sm font-semibold tracking-tight truncate max-w-[200px] group-hover:text-primary transition-colors">
+            <div className="flex flex-col">
+              <h1 className="text-sm font-semibold tracking-tight">
                 {slug}
               </h1>
-              {slugCopied ? (
-                <Check className="w-3.5 h-3.5 text-success" />
-              ) : (
-                <Copy className="w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
-              )}
-            </button>
+              <button
+                onClick={handleCopyLink}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors -ml-1"
+                title={t("space.copyLink")}
+              >
+                <span className="truncate max-w-[180px]">{displayUrl}</span>
+                {slugCopied ? (
+                  <Check className="w-3 h-3 text-success shrink-0" />
+                ) : (
+                  <Copy className="w-3 h-3 shrink-0" />
+                )}
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-1">
-            <ThemeToggle className="mr-1" />
-
-            <button
-              onClick={handleCopyLink}
-              className="p-2 rounded-lg hover:bg-foreground/5 transition-all flex items-center gap-1.5"
-              title={t("space.copyLink")}
-            >
-              {copied ? (
-                <Check className="w-4 h-4 text-success" />
-              ) : (
-                <Link2 className="w-4 h-4" />
-              )}
-              <span className="text-xs text-muted-foreground hidden sm:inline">
-                {copied ? t("space.copied") : t("space.copyLink")}
-              </span>
-            </button>
+            <ThemeToggle />
 
             <button
               onClick={() => { fetchAssets(); fetchStatus(); }}

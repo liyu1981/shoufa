@@ -338,23 +338,22 @@ export default function HomePage() {
           </p>
         </footer>
 
-        {/* SEO: how it works */}
-        <section className="mt-16 max-w-2xl mx-auto px-4 text-center">
-          <h2 className="text-lg font-semibold text-foreground/80 mb-4">
-            How to share text and images that auto-expire
-          </h2>
-          <div className="grid sm:grid-cols-3 gap-6 text-sm text-muted-foreground">
-            <div>
-              <h3 className="font-medium text-foreground/70 mb-1">1. Create a space</h3>
-              <p>Generate a memorable link like bright-fox, or pick your own name.</p>
+        {/* How it works */}
+        <section className="mt-12 max-w-lg mx-auto px-4">
+          <div className="flex items-center justify-center gap-4 text-sm text-muted-foreground/70">
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full bg-foreground/5 flex items-center justify-center text-xs font-medium">1</span>
+              <span>Create</span>
             </div>
-            <div>
-              <h3 className="font-medium text-foreground/70 mb-1">2. Paste or upload</h3>
-              <p>Add code snippets, passwords, links, or screenshots. Choose how long it lives — from 1 minute to 1 hour.</p>
+            <span className="text-border">→</span>
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full bg-foreground/5 flex items-center justify-center text-xs font-medium">2</span>
+              <span>Paste</span>
             </div>
-            <div>
-              <h3 className="font-medium text-foreground/70 mb-1">3. Share the link</h3>
-              <p>Anyone with the link can copy the text or download the image. Everything disappears when time runs out.</p>
+            <span className="text-border">→</span>
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full bg-foreground/5 flex items-center justify-center text-xs font-medium">3</span>
+              <span>Share</span>
             </div>
           </div>
         </section>
