@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
-import { Clipboard, Upload, Check, Send } from "lucide-react"
+import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon } from "lucide-react"
 
 interface PasteZoneProps {
   slug: string
@@ -204,36 +204,54 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
                      transition-all duration-200 resize-none"
         />
 
-        <div className="flex flex-col gap-2">
-          <button
-            onClick={() => handleTextSubmit(textInput)}
-            disabled={!canSubmit}
-            className={cn(
-              "px-3 py-2 rounded-xl transition-all duration-150 flex items-center justify-center",
-              canSubmit
-                ? "bg-primary text-primary-foreground hover:brightness-110 active:scale-95"
-                : "bg-foreground/5 text-muted-foreground/40 cursor-not-allowed"
-            )}
-            title={t("paste.submit")}
-          >
-            <Send className="w-4 h-4" />
-          </button>
+        <button
+          onClick={() => handleTextSubmit(textInput)}
+          disabled={!canSubmit}
+          className={cn(
+            "px-3 py-2 rounded-xl transition-all duration-150 flex items-center justify-center self-end",
+            canSubmit
+              ? "bg-primary text-primary-foreground hover:brightness-110 active:scale-95"
+              : "bg-foreground/5 text-muted-foreground/40 cursor-not-allowed"
+          )}
+          title={t("paste.submit")}
+        >
+          <Send className="w-4 h-4" />
+        </button>
+      </div>
 
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-2 rounded-xl bg-foreground/5 text-muted-foreground
-                       hover:bg-foreground/10 hover:text-foreground
-                       active:scale-95 transition-all duration-150
-                       flex items-center justify-center"
-            title={t("paste.upload")}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
-              <circle cx="9" cy="9" r="2"/>
-              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
-            </svg>
-          </button>
-        </div>
+      {/* Upload buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => {
+            if (fileInputRef.current) {
+              fileInputRef.current.accept = "image/*"
+              fileInputRef.current.click()
+            }
+          }}
+          className="flex-1 px-4 py-2.5 rounded-xl bg-foreground/5 text-muted-foreground
+                     hover:bg-foreground/10 hover:text-foreground
+                     active:scale-[0.99] transition-all duration-150
+                     flex items-center justify-center gap-2 text-sm"
+        >
+          <ImageIcon className="w-4 h-4" />
+          <span>{t("paste.uploadImage")}</span>
+        </button>
+
+        <button
+          onClick={() => {
+            if (fileInputRef.current) {
+              fileInputRef.current.accept = "*/*"
+              fileInputRef.current.click()
+            }
+          }}
+          className="flex-1 px-4 py-2.5 rounded-xl bg-foreground/5 text-muted-foreground
+                     hover:bg-foreground/10 hover:text-foreground
+                     active:scale-[0.99] transition-all duration-150
+                     flex items-center justify-center gap-2 text-sm"
+        >
+          <FileIcon className="w-4 h-4" />
+          <span>{t("paste.uploadFile")}</span>
+        </button>
       </div>
     </div>
   )

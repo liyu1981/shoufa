@@ -30,10 +30,12 @@
   },
   "paste": {
     "placeholder": "Paste or type text here...",
-    "hint": "Type, paste (Ctrl+V), or upload an image",
-    "hintMobile": "Type or paste text, or upload an image",
+    "hint": "Type, paste (Ctrl+V), or drop a file",
+    "hintMobile": "Type or paste text, or drop a file",
     "submit": "Submit",
     "upload": "Upload image",
+    "uploadImage": "Upload image",
+    "uploadFile": "Upload file",
     "saved": "Text saved!",
     "uploaded": "Image uploaded!",
     "uploading": "Uploading..."

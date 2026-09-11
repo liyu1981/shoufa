@@ -35,6 +35,8 @@
     "hintMobile": "输入或粘贴文本，或上传图片",
     "submit": "提交",
     "upload": "上传图片",
+    "uploadImage": "上传图片",
+    "uploadFile": "上传文件",
     "saved": "文本已保存！",
     "uploaded": "图片已上传！",
     "uploading": "上传中..."
