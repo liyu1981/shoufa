@@ -338,7 +338,7 @@ export default function SlugSpacePage() {
         {/* Footer info */}
         {assets.length > 0 && (
           <p className="text-xs text-muted-foreground/50 text-center mt-8">
-            {t("space.assets", { count: assets.length })} · {t("space.refreshing")}
+            {t("space.assets", { count: assets.length })}
           </p>
         )}
 

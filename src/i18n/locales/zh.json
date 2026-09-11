@@ -25,7 +25,7 @@
     "refresh": "刷新",
     "clearAll": "清空",
     "expiresIn": "剩余时间",
-    "assets": "{{count}} 个内容",
+    "assets": "{{count}} 项 · 实时",
     "refreshing": "每 2 秒自动刷新",
     "empty": "还没有内容，在上方粘贴吧！"
   },

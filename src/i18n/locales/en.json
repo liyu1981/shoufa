@@ -25,9 +25,7 @@
     "refresh": "Refresh",
     "clearAll": "Clear all",
     "expiresIn": "Expires in",
-    "assets": "{{count}} asset",
-    "assets_plural": "{{count}} assets",
-    "refreshing": "Auto-refreshing every 2s",
+    "assets": "{{count}} item · live",
     "empty": "Nothing here yet. Paste something above!"
   },
   "paste": {
