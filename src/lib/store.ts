@@ -7,11 +7,12 @@ import { limits } from "./config"
 
 export interface Asset {
   id: string
-  type: "text" | "image"
+  type: "text" | "image" | "file"
   content?: string       // for text
-  data?: string          // base64 data URL for image
+  data?: string          // base64 data URL for image/file
   mimeType?: string
   fileName?: string
+  size?: number          // original file size in bytes
   ttl: number            // seconds
   createdAt: number
   expiresAt: number

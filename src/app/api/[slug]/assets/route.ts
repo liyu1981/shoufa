@@ -113,7 +113,7 @@ export async function POST(
 
       return NextResponse.json({ ok: true, data: asset })
     } else if (contentType.includes("multipart/form-data")) {
-      // Image asset
+      // File asset (image or any other file)
       const formData = await req.formData()
       const file = formData.get("file") as File | null
       const ttl = Math.min(Math.max(Number(formData.get("ttl")) || 300, 10), config.maxTtl)
@@ -125,12 +125,9 @@ export async function POST(
         )
       }
 
-      if (!file.type.startsWith("image/")) {
-        return NextResponse.json(
-          { ok: false, error: "Only image files are allowed" },
-          { status: 400 }
-        )
-      }
+      // Determine asset type based on MIME type
+      const isImage = file.type.startsWith("image/")
+      const assetType = isImage ? "image" : "file"
 
       // Check file size BEFORE base64 conversion
       const maxFileSize = config.maxImageSize * SAFETY_MARGIN
@@ -138,7 +135,7 @@ export async function POST(
         return NextResponse.json(
           {
             ok: false,
-            error: `Image too large (${formatBytes(file.size)}). Maximum is ${formatBytes(maxFileSize)}.`,
+            error: `File too large (${formatBytes(file.size)}). Maximum is ${formatBytes(maxFileSize)}.`,
           },
           { status: 413 }
         )
@@ -154,23 +151,24 @@ export async function POST(
         return NextResponse.json(
           {
             ok: false,
-            error: `Image too large after encoding (${formatBytes(dataUrl.length)}). Maximum is ${formatBytes(maxRequestSize)}.`,
+            error: `File too large after encoding (${formatBytes(dataUrl.length)}). Maximum is ${formatBytes(maxRequestSize)}.`,
           },
           { status: 413 }
         )
       }
 
       const asset = await addAsset(slug, {
-        type: "image",
+        type: assetType,
         data: dataUrl,
         mimeType: file.type,
         fileName: file.name,
+        size: file.size,
         ttl,
       })
 
       if (!asset) {
         return NextResponse.json(
-          { ok: false, error: "Failed to save image" },
+          { ok: false, error: "Failed to save file" },
           { status: 500 }
         )
       }

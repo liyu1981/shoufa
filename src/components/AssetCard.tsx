@@ -2,9 +2,10 @@
 
 import { useCallback, useState } from "react"
 import { cn } from "@/lib/utils"
-import { Copy, Download, Trash2, Check, FileText, ImageIcon } from "lucide-react"
+import { Copy, Download, Trash2, Check, FileText, ImageIcon, File } from "lucide-react"
 import type { Asset } from "@/lib/atoms"
 import { CountdownTimer } from "./CountdownTimer"
+import { formatBytes, getAssetSize } from "@/lib/format"
 
 interface AssetCardProps {
   asset: Asset
@@ -24,10 +25,10 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
   }, [asset])
 
   const handleDownload = useCallback(() => {
-    if (asset.type !== "image" || !asset.data) return
+    if (!asset.data) return
     const link = document.createElement("a")
     link.href = asset.data
-    link.download = asset.fileName || "image"
+    link.download = asset.fileName || (asset.type === "image" ? "image" : "file")
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -46,6 +47,7 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
   }, [slug, asset.id, onDelete])
 
   const isExpired = Date.now() > asset.expiresAt
+  const assetSize = getAssetSize(asset)
 
   if (isExpired) return null
 
@@ -67,7 +69,7 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
             </pre>
           </div>
         </div>
-      ) : (
+      ) : asset.type === "image" ? (
         <div className="p-2">
           <div className="relative rounded-lg overflow-hidden bg-muted/30">
             <img
@@ -80,8 +82,28 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
             <div className="flex items-center gap-2 mt-2 px-2">
               <ImageIcon className="w-3 h-3 text-muted-foreground" />
               <span className="text-xs text-muted-foreground truncate">{asset.fileName}</span>
+              <span className="text-xs text-muted-foreground/50">· {formatBytes(assetSize)}</span>
             </div>
           )}
+        </div>
+      ) : (
+        /* File asset */
+        <div className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-foreground/5">
+              <File className="w-5 h-5 text-muted-foreground" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground truncate">
+                {asset.fileName || "Untitled file"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {asset.mimeType && <span>{asset.mimeType}</span>}
+                {asset.mimeType && assetSize > 0 && <span> · </span>}
+                {assetSize > 0 && <span>{formatBytes(assetSize)}</span>}
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -103,11 +125,11 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
             </button>
           )}
-          {asset.type === "image" && (
+          {(asset.type === "image" || asset.type === "file") && asset.data && (
             <button
               onClick={handleDownload}
               className="p-1.5 rounded-lg transition-all duration-150 hover:bg-foreground/5 active:scale-95"
-              title="Download image"
+              title={`Download ${asset.type}`}
             >
               <Download className="w-4 h-4" />
             </button>

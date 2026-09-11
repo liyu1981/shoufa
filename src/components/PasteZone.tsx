@@ -50,7 +50,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     }
   }, [slug, ttl, onAssetAdded])
 
-  const handleImageUpload = useCallback(async (file: File) => {
+  const handleFileUpload = useCallback(async (file: File) => {
     setUploading(true)
     try {
       const formData = new FormData()
@@ -86,7 +86,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     if (imageItem) {
       const file = imageItem.getAsFile()
       if (file) {
-        await handleImageUpload(file)
+        await handleFileUpload(file)
         return
       }
     }
@@ -96,7 +96,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     if (text) {
       setTextInput(text)
     }
-  }, [handleImageUpload])
+  }, [handleFileUpload])
 
   // Handle drag and drop
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -114,9 +114,8 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     setIsDragging(false)
 
     const files = Array.from(e.dataTransfer.files)
-    const imageFile = files.find(f => f.type.startsWith("image/"))
-    if (imageFile) {
-      await handleImageUpload(imageFile)
+    if (files.length > 0) {
+      await handleFileUpload(files[0])
       return
     }
 
@@ -124,18 +123,18 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     if (text) {
       setTextInput(text)
     }
-  }, [handleImageUpload])
+  }, [handleFileUpload])
 
   // Handle file input
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file && file.type.startsWith("image/")) {
-      await handleImageUpload(file)
+    if (file) {
+      await handleFileUpload(file)
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
-  }, [handleImageUpload])
+  }, [handleFileUpload])
 
   const canSubmit = textInput.trim().length > 0
 
@@ -155,7 +154,6 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
         className="hidden"
         onChange={handleFileChange}
       />
