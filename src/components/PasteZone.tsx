@@ -22,6 +22,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const [uploading, setUploading] = useState(false)
   const [lastAction, setLastAction] = useState<"text" | "image" | null>(null)
   const [isMobileDevice, setIsMobileDevice] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [textInput, setTextInput] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -52,6 +53,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
 
   const handleFileUpload = useCallback(async (file: File) => {
     setUploading(true)
+    setError(null)
     try {
       const formData = new FormData()
       formData.append("file", file)
@@ -60,11 +62,18 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
         method: "POST",
         body: formData,
       })
-      if (res.ok) {
+      const data = await res.json()
+      if (data.ok) {
         setLastAction("image")
         setTimeout(() => setLastAction(null), 1500)
         onAssetAdded()
+      } else {
+        setError(data.error || "Upload failed")
+        setTimeout(() => setError(null), 5000)
       }
+    } catch {
+      setError("Upload failed")
+      setTimeout(() => setError(null), 5000)
     } finally {
       setUploading(false)
     }
@@ -208,7 +217,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
           onClick={() => handleTextSubmit(textInput)}
           disabled={!canSubmit}
           className={cn(
-            "px-3 py-2 rounded-xl transition-all duration-150 flex items-center justify-center self-end",
+            "px-3 rounded-xl transition-all duration-150 flex items-center justify-center",
             canSubmit
               ? "bg-primary text-primary-foreground hover:brightness-110 active:scale-95"
               : "bg-foreground/5 text-muted-foreground/40 cursor-not-allowed"
@@ -253,6 +262,11 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
           <span>{t("paste.uploadFile")}</span>
         </button>
       </div>
+
+      {/* Error message */}
+      {error && (
+        <p className="text-sm text-destructive text-center">{error}</p>
+      )}
     </div>
   )
 }
