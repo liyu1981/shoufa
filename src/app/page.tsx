@@ -340,20 +340,20 @@ export default function HomePage() {
 
         {/* How it works */}
         <section className="mt-12 max-w-lg mx-auto px-4">
-          <div className="flex items-center justify-center gap-4 text-sm text-muted-foreground/70">
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm text-muted-foreground/70 text-center">
             <div className="flex items-center gap-2">
               <span className="w-6 h-6 rounded-full bg-foreground/5 flex items-center justify-center text-xs font-medium">1</span>
-              <span>Create</span>
+              <span>Create/join a space</span>
             </div>
             <span className="text-border">→</span>
             <div className="flex items-center gap-2">
               <span className="w-6 h-6 rounded-full bg-foreground/5 flex items-center justify-center text-xs font-medium">2</span>
-              <span>Paste</span>
+              <span>Paste/upload a file</span>
             </div>
             <span className="text-border">→</span>
             <div className="flex items-center gap-2">
               <span className="w-6 h-6 rounded-full bg-foreground/5 flex items-center justify-center text-xs font-medium">3</span>
-              <span>Share</span>
+              <span>Share/download what you need</span>
             </div>
           </div>
         </section>

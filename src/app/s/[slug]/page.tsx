@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
@@ -17,7 +17,6 @@ import {
   Trash2,
   Timer,
   RefreshCw,
-  Link2,
   AlertTriangle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -37,14 +36,12 @@ export default function SlugSpacePage() {
 
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
-  const [copied, setCopied] = useState(false)
   const [slugCopied, setSlugCopied] = useState(false)
-  const [host, setHost] = useState("")
-
-  // Get host on mount
-  useEffect(() => {
-    setHost(window.location.host)
-  }, [])
+  const origin = useSyncExternalStore(
+    () => () => {},
+    () => window.location.origin,
+    () => ""
+  )
   const [clearing, setClearing] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const [ttl, setTtl] = useState(900) // default 15 minutes
@@ -127,14 +124,12 @@ export default function SlugSpacePage() {
   const handleCopyLink = useCallback(async () => {
     const url = `${window.location.origin}/s/${slug}`
     await navigator.clipboard.writeText(url)
-    setCopied(true)
     setSlugCopied(true)
-    setTimeout(() => setCopied(false), 1500)
     setTimeout(() => setSlugCopied(false), 1500)
   }, [slug])
 
   // Get display URL
-  const displayUrl = host ? `${host}/s/${slug}` : `/s/${slug}`
+  const displayUrl = origin ? `${origin}/s/${slug}` : `/s/${slug}`
 
   // Clear all assets
   const handleClearAll = useCallback(async () => {
@@ -209,9 +204,18 @@ export default function SlugSpacePage() {
               <ArrowLeft className="w-4 h-4" />
             </button>
             <div className="flex flex-col">
-              <h1 className="text-sm font-semibold tracking-tight">
-                {slug}
-              </h1>
+              <button
+                onClick={handleCopyLink}
+                className="flex items-center gap-1 self-start rounded-md text-sm font-semibold tracking-tight hover:text-primary transition-colors"
+                title={t("space.copyLink")}
+              >
+                <span role="heading" aria-level={1}>{slug}</span>
+                {slugCopied ? (
+                  <Check className="w-3 h-3 text-success shrink-0" />
+                ) : (
+                  <Copy className="w-3 h-3 text-muted-foreground shrink-0" />
+                )}
+              </button>
               <button
                 onClick={handleCopyLink}
                 className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors -ml-1"
