@@ -4,6 +4,7 @@ import { useCallback, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
 import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon } from "lucide-react"
+import { AlertDialog } from "./AlertDialog"
 
 interface PasteZoneProps {
   slug: string
@@ -263,10 +264,12 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
         </button>
       </div>
 
-      {/* Error message */}
-      {error && (
-        <p className="text-sm text-destructive text-center">{error}</p>
-      )}
+      {/* Error dialog */}
+      <AlertDialog
+        open={!!error}
+        onClose={() => setError(null)}
+        message={error || ""}
+      />
     </div>
   )
 }
