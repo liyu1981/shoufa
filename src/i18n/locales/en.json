@@ -44,5 +44,15 @@
     "light": "Light",
     "dark": "Dark",
     "system": "System"
+  },
+  "optimize": {
+    "title": "Image Too Large",
+    "description": "Your image is {{size}}. Maximum allowed is {{max}}.",
+    "processing": "Analyzing…",
+    "cancel": "Cancel",
+    "confirm": "Use this",
+    "unsupported": "This image format cannot be auto-optimized. Please convert to JPEG or WebP first.",
+    "failed": "Optimization failed. Please try a different image.",
+    "stillTooLarge": "Result is still over the limit. Try a smaller option."
   }
 }

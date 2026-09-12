@@ -3,8 +3,13 @@
 import { useCallback, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
+import { isOptimizable } from "@/lib/image-optimize"
 import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon } from "lucide-react"
 import { AlertDialog } from "./AlertDialog"
+import { ImageOptimizeDialog } from "./ImageOptimizeDialog"
+
+/** Client-side upload limit (matches free-tier default). Server is authoritative. */
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024
 
 interface PasteZoneProps {
   slug: string
@@ -27,6 +32,9 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const [textInput, setTextInput] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Image optimization dialog state
+  const [optimizeFile, setOptimizeFile] = useState<File | null>(null)
+  const [optimizeOpen, setOptimizeOpen] = useState(false)
 
   useEffect(() => {
     setIsMobileDevice(isMobile())
@@ -80,6 +88,43 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     }
   }, [slug, ttl, onAssetAdded])
 
+  /**
+   * Entry point for all file uploads.
+   * If the file is an image exceeding the limit and optimizable, show dialog.
+   * Otherwise upload directly.
+   */
+  const handleFile = useCallback(
+    async (file: File) => {
+      const isImage = file.type.startsWith("image/")
+      if (isImage && file.size > MAX_IMAGE_SIZE && isOptimizable(file)) {
+        // Show optimization dialog — upload will happen on confirm
+        setOptimizeFile(file)
+        setOptimizeOpen(true)
+        return
+      }
+
+      // Non-image or under limit — upload directly
+      await handleFileUpload(file)
+    },
+    [handleFileUpload],
+  )
+
+  /** Called when user picks an optimization in the dialog */
+  const handleOptimizeConfirm = useCallback(
+    async (optimized: File) => {
+      setOptimizeOpen(false)
+      setOptimizeFile(null)
+      await handleFileUpload(optimized)
+    },
+    [handleFileUpload],
+  )
+
+  /** Called when user cancels the dialog */
+  const handleOptimizeCancel = useCallback(() => {
+    setOptimizeOpen(false)
+    setOptimizeFile(null)
+  }, [])
+
   // Handle paste events on the zone (desktop Ctrl+V)
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     // If textarea is focused, let the native paste happen
@@ -96,7 +141,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     if (imageItem) {
       const file = imageItem.getAsFile()
       if (file) {
-        await handleFileUpload(file)
+        await handleFile(file)
         return
       }
     }
@@ -106,7 +151,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     if (text) {
       setTextInput(text)
     }
-  }, [handleFileUpload])
+  }, [handleFile])
 
   // Handle drag and drop
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -125,7 +170,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
 
     const files = Array.from(e.dataTransfer.files)
     if (files.length > 0) {
-      await handleFileUpload(files[0])
+      await handleFile(files[0])
       return
     }
 
@@ -133,18 +178,18 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     if (text) {
       setTextInput(text)
     }
-  }, [handleFileUpload])
+  }, [handleFile])
 
   // Handle file input
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      await handleFileUpload(file)
+      await handleFile(file)
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
-  }, [handleFileUpload])
+  }, [handleFile])
 
   const canSubmit = textInput.trim().length > 0
 
@@ -269,6 +314,15 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
         open={!!error}
         onClose={() => setError(null)}
         message={error || ""}
+      />
+
+      {/* Image optimization dialog */}
+      <ImageOptimizeDialog
+        open={optimizeOpen}
+        file={optimizeFile}
+        maxAllowedSize={MAX_IMAGE_SIZE}
+        onConfirm={handleOptimizeConfirm}
+        onCancel={handleOptimizeCancel}
       />
     </div>
   )
