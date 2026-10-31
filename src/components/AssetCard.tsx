@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
-import { Copy, Download, Trash2, Check, FileText, ImageIcon, File, Maximize2 } from "lucide-react"
+import { Copy, Download, Trash2, Check, FileText, ImageIcon, ImageOff, File, Maximize2 } from "lucide-react"
 import type { Asset } from "@/lib/atoms"
 import { CountdownTimer } from "./CountdownTimer"
 import { ImageLightbox } from "./ImageLightbox"
@@ -20,6 +20,7 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
   const [copied, setCopied] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [imageFailed, setImageFailed] = useState(false)
 
   const handleCopy = useCallback(async () => {
     if (asset.type !== "text" || !asset.content) return
@@ -75,22 +76,32 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
         </div>
       ) : asset.type === "image" ? (
         <div className="p-2">
-          <button
-            type="button"
-            onClick={() => setLightboxOpen(true)}
-            aria-label={t("lightbox.open")}
-            title={t("lightbox.open")}
-            className="group relative block w-full rounded-lg overflow-hidden bg-muted/30 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            <img
-              src={asset.data}
-              alt={asset.fileName || "Pasted image"}
-              className="w-full h-auto max-h-[300px] object-contain"
-            />
-            <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-150 group-hover:bg-black/20">
-              <Maximize2 className="w-6 h-6 text-white opacity-0 transition-opacity duration-150 group-hover:opacity-80" />
-            </span>
-          </button>
+          {imageFailed ? (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-lg bg-muted/30 py-10 px-4 text-center">
+              <ImageOff className="w-8 h-8 text-muted-foreground/50" />
+              <p className="text-xs text-muted-foreground">
+                {t("asset.previewUnavailable")}
+              </p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(true)}
+              aria-label={t("lightbox.open")}
+              title={t("lightbox.open")}
+              className="group relative block w-full rounded-lg overflow-hidden bg-muted/30 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <img
+                src={asset.data}
+                alt={asset.fileName || "Pasted image"}
+                className="w-full h-auto max-h-[300px] object-contain"
+                onError={() => setImageFailed(true)}
+              />
+              <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-150 group-hover:bg-black/20">
+                <Maximize2 className="w-6 h-6 text-white opacity-0 transition-opacity duration-150 group-hover:opacity-80" />
+              </span>
+            </button>
+          )}
           {asset.fileName && (
             <div className="flex items-center gap-2 mt-2 px-2">
               <ImageIcon className="w-3 h-3 text-muted-foreground" />

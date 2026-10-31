@@ -3,6 +3,8 @@
  * Supports JPEG, WebP, and PNG. Other formats are returned as-is.
  */
 
+import { getEffectiveMimeType } from "./file-type"
+
 
 
 /** MIME types we can optimize via Canvas */
@@ -10,7 +12,7 @@ const OPTIMIZABLE_TYPES = new Set(["image/jpeg", "image/webp", "image/png"])
 
 /** Whether a file is eligible for client-side optimization */
 export function isOptimizable(file: File): boolean {
-  return OPTIMIZABLE_TYPES.has(file.type)
+  return OPTIMIZABLE_TYPES.has(getEffectiveMimeType(file))
 }
 
 /** Human-readable file size */

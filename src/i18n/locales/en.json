@@ -39,7 +39,8 @@
     "uploadFile": "Upload file",
     "saved": "Text saved!",
     "uploaded": "Image uploaded!",
-    "uploading": "Uploading..."
+    "uploading": "Uploading...",
+    "unsupportedImage": "This image format cannot be previewed. Convert it to JPEG/PNG/WebP, or use Upload file."
   },
   "theme": {
     "light": "Light",
@@ -64,5 +65,8 @@
     "reset": "Reset zoom",
     "close": "Close",
     "hint": "Scroll to zoom · Drag to pan"
+  },
+  "asset": {
+    "previewUnavailable": "Preview unavailable — use the download button."
   }
 }

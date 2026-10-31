@@ -4,6 +4,7 @@ import { useCallback, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
 import { isOptimizable } from "@/lib/image-optimize"
+import { isImageFile } from "@/lib/file-type"
 import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon } from "lucide-react"
 import { AlertDialog } from "./AlertDialog"
 import { ImageOptimizeDialog } from "./ImageOptimizeDialog"
@@ -20,6 +21,23 @@ interface PasteZoneProps {
 function isMobile(): boolean {
   if (typeof navigator === "undefined") return false
   return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+}
+
+/** Check whether the browser can actually decode this image type. */
+function canDecodeImage(file: File): Promise<boolean> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+
+    const finish = (result: boolean) => {
+      URL.revokeObjectURL(url)
+      resolve(result)
+    }
+
+    img.onload = () => finish(true)
+    img.onerror = () => finish(false)
+    img.src = url
+  })
 }
 
 export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
@@ -95,7 +113,21 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
    */
   const handleFile = useCallback(
     async (file: File) => {
-      const isImage = file.type.startsWith("image/")
+      const isImage = isImageFile(file)
+
+      // Formats such as HEIC can be decoded by Safari but not by Chrome, and
+      // some formats (TIFF, etc.) cannot be previewed by any browser. Reject
+      // them early with a clear message instead of uploading a broken image
+      // preview. The "Upload file" button still allows sharing them as files.
+      if (isImage && !isOptimizable(file)) {
+        const decodable = await canDecodeImage(file)
+        if (!decodable) {
+          setError(t("paste.unsupportedImage"))
+          setTimeout(() => setError(null), 7000)
+          return
+        }
+      }
+
       if (isImage && file.size > MAX_IMAGE_SIZE && isOptimizable(file)) {
         // Show optimization dialog — upload will happen on confirm
         setOptimizeFile(file)
@@ -106,7 +138,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
       // Non-image or under limit — upload directly
       await handleFileUpload(file)
     },
-    [handleFileUpload],
+    [handleFileUpload, t],
   )
 
   /** Called when user picks an optimization in the dialog */

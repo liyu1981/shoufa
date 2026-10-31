@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSlug, getAssets, addAsset } from "@/lib/store"
 import { limits } from "@/lib/config"
+import { getEffectiveMimeType } from "@/lib/file-type"
 
 // Force dynamic for this route
 export const dynamic = "force-dynamic"
@@ -125,8 +126,10 @@ export async function POST(
         )
       }
 
-      // Determine asset type based on MIME type
-      const isImage = file.type.startsWith("image/")
+      // Determine asset type based on MIME type. Fall back to the filename
+      // extension when the browser reports an empty `File.type`.
+      const mimeType = getEffectiveMimeType(file)
+      const isImage = mimeType.startsWith("image/")
       const assetType = isImage ? "image" : "file"
 
       // Check file size BEFORE base64 conversion
@@ -144,7 +147,7 @@ export async function POST(
       // Convert to base64 data URL
       const bytes = await file.arrayBuffer()
       const base64 = Buffer.from(bytes).toString("base64")
-      const dataUrl = `data:${file.type};base64,${base64}`
+      const dataUrl = `data:${mimeType || "application/octet-stream"};base64,${base64}`
 
       // Double-check base64 size (it's ~33% larger than original)
       if (dataUrl.length > maxRequestSize) {
@@ -160,7 +163,7 @@ export async function POST(
       const asset = await addAsset(slug, {
         type: assetType,
         data: dataUrl,
-        mimeType: file.type,
+        mimeType: mimeType || undefined,
         fileName: file.name,
         size: file.size,
         ttl,
