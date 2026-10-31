@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
 import { GlassCard } from "@/components/GlassCard"
 import { ThemeToggle } from "@/components/ThemeToggle"
+import { StorageProviderBadge } from "@/components/StorageProviderBadge"
 import { useRecentSlugs } from "@/hooks/use-recent-slugs"
 import { Zap, Link2, ArrowRight, Loader2, Clock, X } from "lucide-react"
 
@@ -336,6 +337,7 @@ export default function HomePage() {
               GitHub
             </a>
           </p>
+          <StorageProviderBadge className="text-xs text-muted-foreground/40" />
         </footer>
 
         {/* How it works */}

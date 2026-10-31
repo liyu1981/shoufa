@@ -26,11 +26,23 @@ export function getCloudConfig(): RestConfig | null {
   return url && token ? { url, token } : null
 }
 
+function cloudDisplayName(url: string): string {
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    if (host === "upstash.io" || host.endsWith(".upstash.io")) return "Upstash"
+    if (host === "layerbase.dev" || host.endsWith(".layerbase.dev")) return "Layerbase"
+  } catch {
+    // Fall through to the generic label.
+  }
+  return "Upstash-compatible cloud"
+}
+
 export function getStorageProviderInfo(): StorageProviderInfo {
   const selfHosted = getSelfHostedConfig()
   if (selfHosted) {
     return {
       kind: "self-hosted",
+      displayName: "shoufad",
       configured: true,
       source: "self-hosted",
       url: selfHosted.url,
@@ -41,6 +53,7 @@ export function getStorageProviderInfo(): StorageProviderInfo {
   if (cloud) {
     return {
       kind: "upstash",
+      displayName: cloudDisplayName(cloud.url),
       configured: true,
       source: "cloud",
       url: cloud.url,
@@ -49,6 +62,7 @@ export function getStorageProviderInfo(): StorageProviderInfo {
 
   return {
     kind: "memory",
+    displayName: "in-memory storage",
     configured: false,
     source: "dev-memory",
   }

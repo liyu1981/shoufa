@@ -2,7 +2,8 @@
   "app": {
     "title": "Shoufa",
     "tagline": "粘贴、分享、消失。",
-    "description": "有时限的临时剪贴板"
+    "description": "有时限的临时剪贴板",
+    "poweredBy": "存储由 {{provider}} 提供"
   },
   "home": {
     "join": {

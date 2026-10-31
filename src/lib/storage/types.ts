@@ -34,6 +34,8 @@ export interface RedisAdapter {
 
 export interface StorageProviderInfo {
   kind: StorageProviderKind
+  /** Human-readable backend name, e.g. "shoufad", "Upstash", "Layerbase". */
+  displayName: string
   configured: boolean
   source: "self-hosted" | "cloud" | "dev-memory"
   /** Base URL for REST-backed providers. Never includes the token. */

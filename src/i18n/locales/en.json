@@ -2,7 +2,8 @@
   "app": {
     "title": "Shoufa",
     "tagline": "Paste. Share. Disappear.",
-    "description": "Ephemeral clipboard with a time limit"
+    "description": "Ephemeral clipboard with a time limit",
+    "poweredBy": "powered by {{provider}}"
   },
   "home": {
     "join": {

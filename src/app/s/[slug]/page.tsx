@@ -8,6 +8,7 @@ import { GlassCard } from "@/components/GlassCard"
 import { PasteZone } from "@/components/PasteZone"
 import { AssetCard } from "@/components/AssetCard"
 import { ThemeToggle } from "@/components/ThemeToggle"
+import { StorageProviderBadge } from "@/components/StorageProviderBadge"
 import type { Asset } from "@/lib/atoms"
 import { addRecentSlug } from "@/lib/recent-slugs"
 import {
@@ -344,7 +345,7 @@ export default function SlugSpacePage() {
         )}
 
         {/* Footer */}
-        <footer className="mt-12 text-center">
+        <footer className="mt-12 text-center space-y-1">
           <p className="text-xs text-muted-foreground/40">
             Made with ❤️ in Sydney ·{' '}
             <a
@@ -356,6 +357,7 @@ export default function SlugSpacePage() {
               GitHub
             </a>
           </p>
+          <StorageProviderBadge className="text-xs text-muted-foreground/40" />
         </footer>
       </main>
     </div>
