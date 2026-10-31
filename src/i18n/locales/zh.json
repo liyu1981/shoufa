@@ -56,5 +56,14 @@
     "unsupported": "此图片格式无法自动优化，请先转换为 JPEG 或 WebP。",
     "failed": "优化失败，请换一张图片试试。",
     "stillTooLarge": "结果仍然超过限制，请选择更小的选项。"
+  },
+  "lightbox": {
+    "title": "图片预览",
+    "open": "打开图片预览",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "reset": "重置缩放",
+    "close": "关闭",
+    "hint": "滚轮缩放 · 拖动平移"
   }
 }

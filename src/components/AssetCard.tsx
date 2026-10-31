@@ -1,10 +1,12 @@
 "use client"
 
 import { useCallback, useState } from "react"
+import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
-import { Copy, Download, Trash2, Check, FileText, ImageIcon, File } from "lucide-react"
+import { Copy, Download, Trash2, Check, FileText, ImageIcon, File, Maximize2 } from "lucide-react"
 import type { Asset } from "@/lib/atoms"
 import { CountdownTimer } from "./CountdownTimer"
+import { ImageLightbox } from "./ImageLightbox"
 import { formatBytes, getAssetSize } from "@/lib/format"
 
 interface AssetCardProps {
@@ -14,8 +16,10 @@ interface AssetCardProps {
 }
 
 export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
 
   const handleCopy = useCallback(async () => {
     if (asset.type !== "text" || !asset.content) return
@@ -71,13 +75,22 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
         </div>
       ) : asset.type === "image" ? (
         <div className="p-2">
-          <div className="relative rounded-lg overflow-hidden bg-muted/30">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label={t("lightbox.open")}
+            title={t("lightbox.open")}
+            className="group relative block w-full rounded-lg overflow-hidden bg-muted/30 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
             <img
               src={asset.data}
               alt={asset.fileName || "Pasted image"}
               className="w-full h-auto max-h-[300px] object-contain"
             />
-          </div>
+            <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-150 group-hover:bg-black/20">
+              <Maximize2 className="w-6 h-6 text-white opacity-0 transition-opacity duration-150 group-hover:opacity-80" />
+            </span>
+          </button>
           {asset.fileName && (
             <div className="flex items-center gap-2 mt-2 px-2">
               <ImageIcon className="w-3 h-3 text-muted-foreground" />
@@ -144,6 +157,16 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
           </button>
         </div>
       </div>
+
+      {asset.type === "image" && asset.data && (
+        <ImageLightbox
+          open={lightboxOpen}
+          src={asset.data}
+          alt={asset.fileName || "Pasted image"}
+          fileName={asset.fileName}
+          onClose={() => setLightboxOpen(false)}
+        />
+      )}
     </div>
   )
 }
