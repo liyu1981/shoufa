@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
@@ -48,6 +48,16 @@ export default function SlugSpacePage() {
   const [ttl, setTtl] = useState(900) // default 15 minutes
   const [spaceStatus, setSpaceStatus] = useState<SpaceStatus | null>(null)
   const [remainingTime, setRemainingTime] = useState<number>(0)
+  const assetsRequestId = useRef(0)
+  const statusRequestId = useRef(0)
+  const assetsRef = useRef<Asset[]>([])
+  const emptyAssetsCount = useRef(0)
+
+  // Keep a ref copy so polling can decide whether an empty response is a real
+  // removal without making fetchAssets depend on the assets state.
+  useEffect(() => {
+    assetsRef.current = assets
+  }, [assets])
 
   // Save slug to recent on mount
   useEffect(() => {
@@ -56,34 +66,62 @@ export default function SlugSpacePage() {
     }
   }, [slug])
 
-  // Fetch assets
+  // Fetch assets. Transient backend failures must not clear the current list:
+  // keep showing the last known assets and let the next poll recover.
   const fetchAssets = useCallback(async () => {
+    const requestId = ++assetsRequestId.current
+
     try {
-      const res = await fetch(`/api/${slug}/assets`)
+      const res = await fetch(`/api/${slug}/assets`, { cache: "no-store" })
+      if (requestId !== assetsRequestId.current) return
+      if (!res.ok) return
+
       const data = await res.json()
-      if (data.ok) {
-        setAssets(data.data)
-        setNotFound(false)
-      } else {
-        setNotFound(true)
+      if (requestId !== assetsRequestId.current) return
+
+      if (data.ok && Array.isArray(data.data)) {
+        const nextAssets = data.data as Asset[]
+
+        // Be conservative about empty responses. A single empty poll in the
+        // middle of a flaky backend/network can otherwise make the list blink
+        // out and reappear. Require two consecutive empty responses before
+        // replacing a currently populated list.
+        if (nextAssets.length === 0 && assetsRef.current.length > 0) {
+          emptyAssetsCount.current += 1
+          if (emptyAssetsCount.current < 2) return
+        }
+
+        emptyAssetsCount.current = 0
+        setAssets(nextAssets)
       }
     } catch {
-      setNotFound(true)
+      // Ignore transient network/backend errors and keep the current view.
     } finally {
-      setLoading(false)
+      if (requestId === assetsRequestId.current) {
+        setLoading(false)
+      }
     }
   }, [slug])
 
-  // Fetch space status
+  // Fetch space status. This is the authority for whether the space exists;
+  // asset-list failures should not flip the page into the "not found" view.
   const fetchStatus = useCallback(async () => {
+    const requestId = ++statusRequestId.current
+
     try {
-      const res = await fetch(`/api/${slug}/status`)
+      const res = await fetch(`/api/${slug}/status`, { cache: "no-store" })
+      if (requestId !== statusRequestId.current) return
+      if (!res.ok) return
+
       const data = await res.json()
-      if (data.ok) {
+      if (requestId !== statusRequestId.current) return
+
+      if (data.ok && data.data) {
         setSpaceStatus(data.data)
+        setNotFound(data.data.exists === false)
       }
     } catch {
-      // Ignore errors
+      // Ignore transient errors and keep the current view.
     }
   }, [slug])
 
@@ -139,6 +177,8 @@ export default function SlugSpacePage() {
       for (const asset of assets) {
         await fetch(`/api/${slug}/assets/${asset.id}`, { method: "DELETE" })
       }
+      // Invalidate any asset-list request that started before the deletion.
+      assetsRequestId.current += 1
       setAssets([])
       fetchStatus() // Refresh status after clearing
     } finally {
@@ -148,6 +188,8 @@ export default function SlugSpacePage() {
 
   // Asset deleted
   const handleAssetDeleted = useCallback((id: string) => {
+    // Invalidate any in-flight poll so it cannot resurrect the deleted asset.
+    assetsRequestId.current += 1
     setAssets((prev) => prev.filter((a) => a.id !== id))
     fetchStatus() // Refresh status after deleting
   }, [fetchStatus])

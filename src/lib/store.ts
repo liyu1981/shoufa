@@ -210,8 +210,11 @@ export async function getAssets(slug: string): Promise<Asset[]> {
 
     return assets.sort((a, b) => a.createdAt - b.createdAt)
   } catch (error) {
+    // Let the API surface backend failures as 500s. Returning [] here makes a
+    // transient Redis/network error look like "the space has no assets", which
+    // causes the UI to flicker between empty and populated.
     console.error("[store] getAssets error:", error)
-    return []
+    throw error
   }
 }
 
