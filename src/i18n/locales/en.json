@@ -15,7 +15,7 @@
       "placeholder": "slug",
       "generate": "generate"
     },
-    "footer": "Content auto-expires after 5 minutes · No accounts needed"
+    "footer": "Content auto-expires · No accounts needed"
   },
   "space": {
     "notFound": "Space not found",

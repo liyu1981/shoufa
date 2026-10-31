@@ -1,5 +1,3 @@
-"use client"
-
 import { useCallback, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
@@ -51,10 +49,7 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
     }
   }, [slug, asset.id, onDelete])
 
-  const isExpired = Date.now() > asset.expiresAt
   const assetSize = getAssetSize(asset)
-
-  if (isExpired) return null
 
   return (
     <div

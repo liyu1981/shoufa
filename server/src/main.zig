@@ -1,16 +1,11 @@
-//! Shoufa self-hosted Redis-compatible REST server.
-//!
-//! Implements the Upstash REST wire format used by `@upstash/redis`:
-//!   POST /           body: ["HSET", "key", "field", "value"]
-//!   POST /pipeline   body: [["PING"], ["GET", "key"]]
-//!
-//! Authentication uses Bearer tokens from the server config file
-//! (~/.config/shoufad/config for a manual run, /etc/shoufad/config for systemd).
+//! Shoufa self-hosted server: JSON API, change notifications, and the
+//! embedded Vite frontend, all on one origin.
 
 const std = @import("std");
 const config = @import("config.zig");
 const store_mod = @import("store.zig");
-const protocol = @import("protocol.zig");
+const api = @import("api.zig");
+const web = @import("web_assets.zig");
 const service = @import("service.zig");
 
 const Store = store_mod.Store;
@@ -19,17 +14,19 @@ const Config = config.Config;
 const max_head_bytes = 16 * 1024;
 const transfer_buffer_bytes = 32 * 1024;
 
-const cors_headers = [_]std.http.Header{
-    .{ .name = "content-type", .value = "application/json" },
-    .{ .name = "cache-control", .value = "no-store" },
-    .{ .name = "access-control-allow-origin", .value = "*" },
-    .{ .name = "access-control-allow-headers", .value = "authorization,content-type" },
-    .{ .name = "access-control-allow-methods", .value = "GET,POST,OPTIONS" },
+const security_headers = [_]std.http.Header{
+    .{ .name = "content-security-policy", .value = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" },
+    .{ .name = "x-content-type-options", .value = "nosniff" },
+    .{ .name = "referrer-policy", .value = "strict-origin-when-cross-origin" },
+    .{ .name = "x-frame-options", .value = "DENY" },
+    .{ .name = "permissions-policy", .value = "camera=(), microphone=(), geolocation=(), payment=()" },
+    .{ .name = "cross-origin-opener-policy", .value = "same-origin" },
+    .{ .name = "cross-origin-resource-policy", .value = "same-origin" },
+    .{ .name = "strict-transport-security", .value = "max-age=63072000; includeSubDomains" },
 };
 
 const health_body = "{\"ok\":true,\"service\":\"shoufad\"}";
-const unauthorized_body = "{\"error\":\"Unauthorized\"}";
-const internal_error_body = "{\"error\":\"ERR internal server error\"}";
+const internal_error_body = "{\"ok\":false,\"error\":\"Internal server error\"}";
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -48,7 +45,7 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
         if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "-V")) {
-            try std.Io.File.stdout().writeStreamingAll(init.io, "shoufad 0.1.0\n");
+            try std.Io.File.stdout().writeStreamingAll(init.io, "shoufad 0.2.0\n");
             return;
         }
         if (!std.mem.startsWith(u8, command, "-")) {
@@ -65,6 +62,9 @@ fn runServer(init: std.process.Init) !void {
     const cfg = try loadConfig(init);
     const io = init.io;
 
+    const instance_lock = try acquireInstanceLock(io, cfg.port);
+    defer if (instance_lock) |file| file.close(io);
+
     var store = Store.init(init.gpa, io, cfg.max_memory_bytes, cfg.sweep_interval_ms);
     defer store.deinit();
 
@@ -77,10 +77,9 @@ fn runServer(init: std.process.Init) !void {
 
     std.log.info("shoufad listening on http://{s}:{d}", .{ cfg.bind, cfg.port });
     std.log.info("config: {s}", .{cfg.path});
-    std.log.info("max_memory={d} bytes, sweep_interval={d} ms, auth={s}", .{
+    std.log.info("max_memory={d} bytes, sweep_interval={d} ms", .{
         cfg.max_memory_bytes,
         cfg.sweep_interval_ms,
-        if (cfg.allow_anonymous) "anonymous" else "api-key",
     });
 
     while (true) {
@@ -103,13 +102,37 @@ fn runServer(init: std.process.Init) !void {
     }
 }
 
-fn loadConfig(init: std.process.Init) !Config {
-    return config.load(init) catch |err| switch (err) {
-        error.NoApiKey => {
-            std.log.err("no api_key configured in the config file", .{});
-            std.log.err("add a line like `api_key = sfr_...` or set `allow_anonymous = true`", .{});
+fn acquireInstanceLock(io: std.Io, port: u16) !?std.Io.File {
+    var buffer: [128]u8 = undefined;
+    const path = try std.fmt.bufPrint(&buffer, "/tmp/shoufad-{d}.lock", .{port});
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{
+        .read = true,
+        .truncate = false,
+    });
+
+    const locked = file.tryLock(io, .exclusive) catch |err| switch (err) {
+        error.FileLocksUnsupported => {
+            file.close(io);
+            std.log.warn("file locks are unsupported here; cannot enforce single-instance mode", .{});
+            return null;
+        },
+        else => {
+            file.close(io);
             return err;
         },
+    };
+
+    if (!locked) {
+        file.close(io);
+        std.log.err("another shoufad instance is already running on port {d}", .{port});
+        return error.AlreadyRunning;
+    }
+
+    return file;
+}
+
+fn loadConfig(init: std.process.Init) !Config {
+    return config.load(init) catch |err| switch (err) {
         error.MaxMemoryTooLarge => {
             std.log.err("max_memory_bytes must be <= {d} (5 GiB)", .{config.MAX_MEMORY_CAP});
             return err;
@@ -161,7 +184,7 @@ fn handleConnection(
 
         handleRequest(gpa, store, cfg, &request) catch |err| {
             std.log.debug("request failed: {t}", .{err});
-            respondStatic(&request, .internal_server_error, internal_error_body) catch {};
+            sendResponse(&request, .internal_server_error, internal_error_body, "application/json; charset=utf-8", "no-store") catch {};
             return;
         };
 
@@ -176,10 +199,7 @@ fn handleRequest(
     request: *std.http.Server.Request,
 ) !void {
     if (request.head.method == .OPTIONS) {
-        request.respond("", .{
-            .status = .no_content,
-            .extra_headers = &cors_headers,
-        }) catch return;
+        try sendResponse(request, .method_not_allowed, "{\"ok\":false,\"error\":\"Method not allowed\"}", "application/json; charset=utf-8", "no-store");
         return;
     }
 
@@ -189,220 +209,218 @@ fn handleRequest(
     const query = if (path_end < target.len) target[path_end + 1 ..] else "";
 
     if (std.mem.eql(u8, path, "/health") or std.mem.eql(u8, path, "/healthz")) {
-        try request.respond(health_body, .{
-            .status = .ok,
-            .extra_headers = &cors_headers,
-        });
+        try sendResponse(request, .ok, health_body, "application/json; charset=utf-8", "no-store");
         return;
     }
 
-    if (!authorized(cfg, request, query)) {
-        try request.respond(unauthorized_body, .{
-            .status = .unauthorized,
-            .extra_headers = &cors_headers,
-        });
+    if (std.mem.eql(u8, path, "/wait")) {
+        try handleWait(store, request, query);
         return;
     }
 
-    // @upstash/redis sends `Upstash-Encoding: base64` and expects string
-    // results to be base64-encoded. Capture this before reading the body
-    // invalidates the header buffer.
-    const string_encoding: protocol.StringEncoding = blk: {
-        const header = headerValue(request, "upstash-encoding") orelse break :blk .plain;
-        const trimmed = std.mem.trim(u8, header, " \t");
-        break :blk if (std.ascii.eqlIgnoreCase(trimmed, "base64")) .base64 else .plain;
-    };
-
-    // Read the request body. The transfer buffer needs to stay alive while the
-    // returned body reader is in use.
-    var transfer_buffer: [transfer_buffer_bytes]u8 = undefined;
-    const body_reader = request.readerExpectContinue(&transfer_buffer) catch {
-        try request.respond("{\"error\":\"ERR invalid request body\"}", .{
-            .status = .bad_request,
-            .extra_headers = &cors_headers,
-        });
-        return;
-    };
-    const body = body_reader.allocRemaining(gpa, .limited(cfg.max_request_bytes)) catch |err| {
-        switch (err) {
-            error.StreamTooLong => try request.respond("{\"error\":\"ERR request body too large\"}", .{
-                .status = .payload_too_large,
-                .extra_headers = &cors_headers,
-            }),
-            else => try request.respond("{\"error\":\"ERR failed to read request body\"}", .{
-                .status = .bad_request,
-                .extra_headers = &cors_headers,
-            }),
+    if (std.mem.startsWith(u8, path, "/api/") or std.mem.eql(u8, path, "/api")) {
+        if (request.head.method != .GET and request.head.method != .POST and request.head.method != .DELETE) {
+            try sendResponse(request, .method_not_allowed, "{\"ok\":false,\"error\":\"Method not allowed\"}", "application/json; charset=utf-8", "no-store");
+            return;
         }
-        return;
-    };
-    defer gpa.free(body);
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
+        if (request.head.method != .GET and !isSameOrigin(request)) {
+            try sendResponse(request, .forbidden, "{\"ok\":false,\"error\":\"Cross-origin request rejected\"}", "application/json; charset=utf-8", "no-store");
+            return;
+        }
 
-    if (body.len == 0) {
-        const argv = parsePathCommand(arena_allocator, path) catch {
-            try request.respond("{\"error\":\"ERR empty request body\"}", .{
-                .status = .bad_request,
-                .extra_headers = &cors_headers,
-            });
+        // Capture headers before reading the body; reading invalidates the
+        // request head buffer and header iteration.
+        const content_type = headerValue(request, "content-type") orelse "";
+        if (request.head.method == .POST and !isJsonContentType(content_type)) {
+            try sendResponse(request, .unsupported_media_type, "{\"ok\":false,\"error\":\"Expected application/json\"}", "application/json; charset=utf-8", "no-store");
+            return;
+        }
+
+        // Copy path segments before reading the body. Reading the body
+        // invalidates the request head buffer, and a large upload can
+        // otherwise corrupt the route segments.
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
+        const segments = splitPath(arena_allocator, path) catch {
+            try sendResponse(request, .bad_request, "{\"ok\":false,\"error\":\"Invalid path\"}", "application/json; charset=utf-8", "no-store");
             return;
         };
-        try executeSingle(gpa, store, request, argv, string_encoding);
-        return;
-    }
 
-    const root = std.json.parseFromSliceLeaky(std.json.Value, arena_allocator, body, .{}) catch {
-        try request.respond("{\"error\":\"ERR invalid JSON body\"}", .{
-            .status = .bad_request,
-            .extra_headers = &cors_headers,
-        });
-        return;
-    };
-
-    switch (root) {
-        .array => |array| {
-            if (array.items.len == 0) {
-                try request.respond("{\"error\":\"ERR empty command\"}", .{
-                    .status = .bad_request,
-                    .extra_headers = &cors_headers,
-                });
+        var transfer_buffer: [transfer_buffer_bytes]u8 = undefined;
+        const body_reader = request.readerExpectContinue(&transfer_buffer) catch {
+            try sendResponse(request, .bad_request, "{\"ok\":false,\"error\":\"Invalid request body\"}", "application/json; charset=utf-8", "no-store");
+            return;
+        };
+        const body = body_reader.allocRemaining(gpa, .limited(cfg.max_request_bytes)) catch |err| switch (err) {
+            error.StreamTooLong => {
+                try sendResponse(request, .payload_too_large, "{\"ok\":false,\"error\":\"Request body too large\"}", "application/json; charset=utf-8", "no-store");
                 return;
-            }
+            },
+            else => {
+                try sendResponse(request, .bad_request, "{\"ok\":false,\"error\":\"Failed to read request body\"}", "application/json; charset=utf-8", "no-store");
+                return;
+            },
+        };
+        defer gpa.free(body);
 
-            const first_is_array = switch (array.items[0]) {
-                .array => true,
-                else => false,
-            };
+        const result = api.handle(store, arena_allocator, request.head.method, segments, body) catch |err| {
+            std.log.err("api error: {t}", .{err});
+            try sendResponse(request, .internal_server_error, internal_error_body, "application/json; charset=utf-8", "no-store");
+            return;
+        };
 
-            if (first_is_array or std.mem.eql(u8, path, "/pipeline")) {
-                try executePipeline(gpa, arena_allocator, store, request, array.items, string_encoding);
-            } else {
-                const argv = valueArrayToArgs(arena_allocator, array.items) catch {
-                    try request.respond("{\"error\":\"ERR command arguments must be strings\"}", .{
-                        .status = .bad_request,
-                        .extra_headers = &cors_headers,
-                    });
-                    return;
-                };
-                try executeSingle(gpa, store, request, argv, string_encoding);
-            }
-        },
-        else => {
-            try request.respond("{\"error\":\"ERR expected a JSON command array\"}", .{
-                .status = .bad_request,
-                .extra_headers = &cors_headers,
-            });
-        },
+        try sendResponse(request, result.status, result.body, "application/json; charset=utf-8", "no-store");
+        return;
     }
+
+    if (request.head.method != .GET and request.head.method != .HEAD) {
+        try sendResponse(request, .method_not_allowed, "{\"ok\":false,\"error\":\"Method not allowed\"}", "application/json; charset=utf-8", "no-store");
+        return;
+    }
+
+    try serveStatic(request, path);
 }
 
-fn executeSingle(
-    gpa: std.mem.Allocator,
-    store: *Store,
-    request: *std.http.Server.Request,
-    argv: []const []const u8,
-    encoding: protocol.StringEncoding,
-) !void {
-    const result = protocol.execute(store, gpa, argv, encoding) catch {
-        try request.respond(internal_error_body, .{
-            .status = .internal_server_error,
-            .extra_headers = &cors_headers,
-        });
+fn handleWait(store: *Store, request: *std.http.Server.Request, query: []const u8) !void {
+    if (request.head.method != .GET) {
+        try sendResponse(request, .method_not_allowed, "{\"ok\":false,\"error\":\"Method not allowed\"}", "application/json; charset=utf-8", "no-store");
+        return;
+    }
+
+    const slug = queryParam(query, "slug") orelse {
+        try sendResponse(request, .bad_request, "{\"ok\":false,\"error\":\"Missing slug\"}", "application/json; charset=utf-8", "no-store");
         return;
     };
-    defer gpa.free(result.body);
+    if (!api.isValidSlug(slug)) {
+        try sendResponse(request, .bad_request, "{\"ok\":false,\"error\":\"Invalid slug\"}", "application/json; charset=utf-8", "no-store");
+        return;
+    }
 
-    try request.respond(result.body, .{
-        .status = if (result.is_error) .bad_request else .ok,
-        .extra_headers = &cors_headers,
-    });
+    const since_raw = queryParam(query, "rev");
+    var buffer: [128]u8 = undefined;
+    const body = if (since_raw) |raw| blk: {
+        const since = std.fmt.parseInt(u64, raw, 10) catch 0;
+        const revision = store.waitForRevision(slug, since, 25_000);
+        break :blk std.fmt.bufPrint(&buffer, "{{\"rev\":{d},\"changed\":{s}}}", .{
+            revision,
+            if (revision != since) "true" else "false",
+        }) catch "{\"rev\":0,\"changed\":false}";
+    } else blk: {
+        const revision = store.revision(slug);
+        break :blk std.fmt.bufPrint(&buffer, "{{\"rev\":{d},\"changed\":false}}", .{revision}) catch "{\"rev\":0,\"changed\":false}";
+    };
+
+    try sendResponse(request, .ok, body, "application/json; charset=utf-8", "no-store");
 }
 
-fn executePipeline(
-    gpa: std.mem.Allocator,
-    arena: std.mem.Allocator,
-    store: *Store,
-    request: *std.http.Server.Request,
-    commands: []const std.json.Value,
-    encoding: protocol.StringEncoding,
-) !void {
-    var out: std.Io.Writer.Allocating = .init(gpa);
-    defer out.deinit();
+fn serveStatic(request: *std.http.Server.Request, path: []const u8) !void {
+    if (findAsset(path)) |asset| {
+        try sendResponse(request, .ok, asset.data, asset.content_type, asset.cache_control);
+        return;
+    }
 
-    try out.writer.writeAll("[");
-    for (commands, 0..) |command, index| {
-        if (index != 0) try out.writer.writeAll(",");
-
-        var argv: []const []const u8 = &.{};
-        switch (command) {
-            .array => |args| {
-                argv = valueArrayToArgs(arena, args.items) catch &.{};
-            },
-            else => {},
-        }
-
-        if (argv.len == 0) {
-            try out.writer.writeAll("{\"error\":\"ERR each pipeline item must be a command array\"}");
-            continue;
-        }
-
-        {
-            const result = protocol.execute(store, gpa, argv, encoding) catch {
-                try out.writer.writeAll(internal_error_body);
-                continue;
-            };
-            defer gpa.free(result.body);
-            try out.writer.writeAll(result.body);
+    // SPA fallback for /s/<slug> and other client-side routes.
+    if (!looksLikeAsset(path)) {
+        if (findAsset("/index.html")) |index| {
+            try sendResponse(request, .ok, index.data, index.content_type, index.cache_control);
+            return;
         }
     }
-    try out.writer.writeAll("]");
 
-    const response_body = try out.toOwnedSlice();
-    defer gpa.free(response_body);
-    try request.respond(response_body, .{
-        .status = .ok,
-        .extra_headers = &cors_headers,
-    });
+    try sendResponse(request, .not_found, "Not found", "text/plain; charset=utf-8", "no-store");
 }
 
-fn respondStatic(request: *std.http.Server.Request, status: std.http.Status, body: []const u8) !void {
+fn findAsset(path: []const u8) ?web.Asset {
+    const normalized = if (std.mem.eql(u8, path, "/")) "/index.html" else path;
+    for (web.assets) |asset| {
+        if (std.mem.eql(u8, asset.path, normalized)) return asset;
+    }
+    return null;
+}
+
+fn looksLikeAsset(path: []const u8) bool {
+    if (std.mem.startsWith(u8, path, "/assets/") or std.mem.startsWith(u8, path, "/icons/")) return true;
+    if (std.mem.eql(u8, path, "/sw.js") or std.mem.eql(u8, path, "/manifest.webmanifest") or std.mem.eql(u8, path, "/robots.txt")) return true;
+
+    const last_slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse 0;
+    const last_segment = path[last_slash + 1 ..];
+    return std.mem.indexOfScalar(u8, last_segment, '.') != null;
+}
+
+fn sendResponse(
+    request: *std.http.Server.Request,
+    status: std.http.Status,
+    body: []const u8,
+    content_type: []const u8,
+    cache_control: []const u8,
+) !void {
+    var headers: [security_headers.len + 2]std.http.Header = undefined;
+    var count: usize = 0;
+    for (security_headers) |header| {
+        headers[count] = header;
+        count += 1;
+    }
+    headers[count] = .{ .name = "content-type", .value = content_type };
+    count += 1;
+    headers[count] = .{ .name = "cache-control", .value = cache_control };
+    count += 1;
+
     try request.respond(body, .{
         .status = status,
-        .extra_headers = &cors_headers,
+        .extra_headers = headers[0..count],
     });
 }
 
-fn authorized(cfg: *const Config, request: *std.http.Server.Request, query: []const u8) bool {
-    if (cfg.allow_anonymous) return true;
+fn splitPath(arena: std.mem.Allocator, path: []const u8) ![]const []const u8 {
+    var parts: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, std.mem.trim(u8, path, "/"), '/');
+    while (it.next()) |part| {
+        if (part.len > 0) try parts.append(arena, try arena.dupe(u8, part));
+    }
+    return parts.toOwnedSlice(arena);
+}
 
-    var token: ?[]const u8 = null;
-    if (headerValue(request, "authorization")) |value| {
-        const trimmed = std.mem.trim(u8, value, " \t");
-        if (trimmed.len > 7 and std.ascii.eqlIgnoreCase(trimmed[0..7], "Bearer ")) {
-            token = std.mem.trim(u8, trimmed[7..], " \t");
+fn isSameOrigin(request: *std.http.Server.Request) bool {
+    if (headerValue(request, "sec-fetch-site")) |site| {
+        if (std.ascii.eqlIgnoreCase(site, "cross-site")) return false;
+    }
+
+    const origin = headerValue(request, "origin") orelse return true;
+    if (std.mem.eql(u8, origin, "null")) return false;
+
+    const host = headerValue(request, "host") orelse return false;
+    const scheme_end = std.mem.indexOf(u8, origin, "://") orelse return false;
+    var origin_host = origin[scheme_end + 3 ..];
+    if (std.mem.indexOfScalar(u8, origin_host, '/')) |slash| origin_host = origin_host[0..slash];
+
+    return std.ascii.eqlIgnoreCase(stripPort(origin_host), stripPort(host));
+}
+
+fn stripPort(value: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, value, ':')) |colon| {
+        // Preserve IPv6 literals such as [::1].
+        if (std.mem.indexOfScalar(u8, value, ']')) |bracket| {
+            if (colon < bracket) return value;
         }
+        return value[0..colon];
     }
-    if (token == null) {
-        token = queryParam(query, "token");
-    }
-
-    const provided = token orelse return false;
-    if (provided.len == 0) return false;
-    for (cfg.api_keys) |key| {
-        if (std.mem.eql(u8, provided, key)) return true;
-    }
-    return false;
+    return value;
 }
 
 fn headerValue(request: *std.http.Server.Request, name: []const u8) ?[]const u8 {
     var it = request.iterateHeaders();
     while (it.next()) |header| {
-        if (std.ascii.eqlIgnoreCase(header.name, name)) return header.value;
+        if (std.ascii.eqlIgnoreCase(header.name, name)) {
+            return std.mem.trim(u8, header.value, " \t");
+        }
     }
     return null;
+}
+
+fn isJsonContentType(value: []const u8) bool {
+    return value.len >= 16 and std.ascii.eqlIgnoreCase(value[0..16], "application/json");
 }
 
 fn queryParam(query: []const u8, name: []const u8) ?[]const u8 {
@@ -412,63 +430,4 @@ fn queryParam(query: []const u8, name: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, pair[0..eq], name)) return pair[eq + 1 ..];
     }
     return null;
-}
-
-fn parsePathCommand(arena: std.mem.Allocator, path: []const u8) ![]const []const u8 {
-    const trimmed = std.mem.trim(u8, path, "/");
-    if (trimmed.len == 0) return error.BadRequest;
-
-    var parts: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, trimmed, '/');
-    while (it.next()) |part| {
-        const decoded = try percentDecode(arena, part);
-        try parts.append(arena, decoded);
-    }
-    return parts.toOwnedSlice(arena);
-}
-
-fn percentDecode(arena: std.mem.Allocator, value: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, value, '%') == null) return arena.dupe(u8, value);
-
-    var out: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
-    while (i < value.len) {
-        if (value[i] == '%' and i + 2 < value.len) {
-            const high = std.fmt.charToDigit(value[i + 1], 16) catch {
-                try out.append(arena, value[i]);
-                i += 1;
-                continue;
-            };
-            const low = std.fmt.charToDigit(value[i + 2], 16) catch {
-                try out.append(arena, value[i]);
-                i += 1;
-                continue;
-            };
-            try out.append(arena, (high << 4) | low);
-            i += 3;
-        } else {
-            try out.append(arena, value[i]);
-            i += 1;
-        }
-    }
-    return out.toOwnedSlice(arena);
-}
-
-fn valueArrayToArgs(arena: std.mem.Allocator, values: []const std.json.Value) ![]const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    try out.ensureTotalCapacity(arena, values.len);
-    for (values) |value| {
-        try out.append(arena, try valueToString(arena, value));
-    }
-    return out.toOwnedSlice(arena);
-}
-
-fn valueToString(arena: std.mem.Allocator, value: std.json.Value) ![]const u8 {
-    return switch (value) {
-        .string => |s| s,
-        .integer => |i| try std.fmt.allocPrint(arena, "{d}", .{i}),
-        .float => |f| try std.fmt.allocPrint(arena, "{d}", .{f}),
-        .bool => |b| if (b) "true" else "false",
-        else => error.InvalidCommandArgument,
-    };
 }

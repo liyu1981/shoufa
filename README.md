@@ -2,157 +2,124 @@
 
 **Paste. Share. Disappear.**
 
-An ephemeral clipboard with a time limit. Paste text or images, share the link, and watch it auto-expire.
+An ephemeral clipboard with a time limit. Paste text, images, or files, share a
+memorable link, and watch it auto-expire.
 
-## Use Cases
+## Stack
 
-- 📋 **Share code snippets** — Paste code and share the link; expires automatically
-- 🔐 **Send passwords** — Share credentials securely; they disappear after viewing
-- 📱 **Transfer between devices** — Paste on phone, copy on desktop (or vice versa)
-- 🖼️ **Quick image sharing** — Upload screenshots or photos with a self-destructing link
-- 🤝 **Team collaboration** — Share quick notes without cluttering chat
-- 🎫 **One-time secrets** — API keys, tokens, or sensitive info that shouldn't persist
+- **Frontend:** Vite 8, React 19, TanStack Router, Tailwind CSS v4
+- **Backend:** Zig (`shoufad`) serving the API, change notifications, and the
+  embedded frontend from one binary
+- **Storage:** in-memory strings/hashes with TTL cleanup, capped at 5 GiB
+- **No Node.js runtime in production**, no Vercel, no Upstash/Layerbase
 
-## Tech Stack
-
-- **Next.js 16** (App Router)
-- **TypeScript**
-- **Tailwind CSS v4** + Apple glass design system
-- **Jotai** for state management
-- **Pluggable Redis storage** — self-hosted Zig server, Upstash, or in-memory
-- **Zig 0.17+** self-hosted Redis-compatible REST server
-
-## Storage backends
-
-`src/lib/storage/` contains one adapter interface and three implementations. The
-runtime picks the first configured backend:
-
-1. **Self-hosted** — `SHOUFA_REDIS_REST_URL` + `SHOUFA_REDIS_REST_TOKEN`
-2. **Upstash / cloud fallback** — `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`
-3. **In-process memory** — development fallback when neither is configured
-
-Self-hosted always wins when both are present, so production can prefer your own
-server while keeping the cloud variables as a fallback for other environments.
-See [`docs/self-hosted-redis.md`](./docs/self-hosted-redis.md) and
-[`server/README.md`](./server/README.md).
+The frontend build is embedded into the `shoufad` binary. One process serves
+`/`, `/s/<slug>`, `/api/*`, `/wait`, and `/health`.
 
 ## Development
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Option A: self-hosted Zig server (recommended, no account needed)
-pnpm redis:selfhost
-# First run creates ~/.config/shoufad/config with a random API key.
-# Copy that key into SHOUFA_REDIS_REST_TOKEN below.
-
-# Option B: temporary Upstash Redis (no account needed)
-pnpm redis
-
-# Start dev server (HTTPS, port 3210)
 pnpm dev
-
-# Open https://localhost:3210
 ```
 
-For self-hosted local development, add to `.env.local`:
+`pnpm dev` runs the full local loop:
+
+1. Build the Vite frontend into `server/src/web`
+2. Embed it into the Zig binary and build `shoufad`
+3. Start `shoufad`
+4. Watch `src/`, `public/`, `scripts/`, `server/src/`, and build files
+5. Rebuild and restart automatically when anything changes
+
+Dev listens on `0.0.0.0:8079`, so phones and other devices on the LAN can
+connect. Open the URL printed by `shoufad`.
+
+To restrict it to localhost:
 
 ```bash
-SHOUFA_REDIS_REST_URL=http://127.0.0.1:8079
-SHOUFA_REDIS_REST_TOKEN=sfr_your-generated-key
+pnpm dev -- --bind 127.0.0.1
 ```
 
-If no storage env vars are set, the app uses the in-memory mock. Data resets on
-restart and is not shared between processes, so use a real backend for anything
-beyond local development.
-
-## Deployment
-
-### Self-hosted Zig Redis (recommended for cost control)
-
-1. Build the server:
-   ```bash
-   pnpm redis:selfhost:build
-   ```
-2. Install it as a systemd service:
-   ```bash
-   # system-wide service (root)
-   sudo server/zig-out/bin/shoufad service-install
-
-   # or per-user service (no root)
-   server/zig-out/bin/shoufad service-install
-   ```
-   The system install uses `/usr/local/bin/shoufad`,
-   `/etc/shoufad/config`, and `shoufad.service`. The user install uses
-   `~/.local/bin/shoufad`, `~/.config/shoufad/config`, and
-   `~/.config/systemd/user/shoufad.service`. Use `--dry-run` first to preview
-   the changes.
-3. Re-run the same command after rebuilding to update the binary/service. The
-   existing config and API key are kept unless you pass `--force`.
-4. Set these on your app host / Vercel project:
-   ```bash
-   SHOUFA_REDIS_REST_URL=https://redis.your-domain.com
-   SHOUFA_REDIS_REST_TOKEN=sfr_your-key
-   ```
-   Keep the server behind TLS if the app is off-host.
-
-The server keeps everything in memory with a hard 5 GiB cap and proactively
-reclaims memory for expired keys. It is single-node and non-persistent by design.
-
-### Vercel + Upstash (cloud fallback)
-
-1. **Create Upstash Redis:**
-   - Go to [Upstash Console](https://console.upstash.com)
-   - Create a new Redis database (free tier: 10,000 commands/day)
-   - Copy the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
-
-2. **Deploy:**
-   ```bash
-   pnpm add -g vercel
-   vercel
-
-   # Add environment variables
-   vercel env add UPSTASH_REDIS_REST_URL
-   vercel env add UPSTASH_REDIS_REST_TOKEN
-
-   # Optional: self-hosted takes precedence if these are also set
-   vercel env add SHOUFA_REDIS_REST_URL
-   vercel env add SHOUFA_REDIS_REST_TOKEN
-
-   # Deploy to production
-   vercel --prod
-   ```
-
-Or connect via Vercel Dashboard:
-1. Push to GitHub
-2. Import project in Vercel
-3. Add environment variables from Upstash and/or the self-hosted server
-
-### Other Platforms (AWS, Google Cloud, DigitalOcean, etc.)
-
-Any platform that supports Node.js will work. Point it at either a self-hosted
-`shoufad` instance or an Upstash-compatible REST endpoint.
+To use a different config:
 
 ```bash
-# Build
-pnpm build
-
-# Start
-pnpm start -p 3000
+pnpm dev -- --config /path/to/config
 ```
 
-### Environment Variables
+For a production-like run:
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `SHOUFA_REDIS_REST_URL` | For self-hosted | Self-hosted server base URL |
-| `SHOUFA_REDIS_REST_TOKEN` | For self-hosted | API key from `~/.config/shoufad/config` (manual run) or `/etc/shoufad/config` (systemd install) |
-| `UPSTASH_REDIS_REST_URL` | For cloud | Upstash-compatible REST URL |
-| `UPSTASH_REDIS_REST_TOKEN` | For cloud | Upstash REST token |
-| `UPSTASH_TIER` | Optional | `free` (default), `pro`, or `enterprise` limits |
+```bash
+pnpm build     # vite build + embed + zig build -Doptimize=ReleaseSafe
+pnpm start     # runs server/zig-out/bin/shoufad
+```
 
-**Without any storage variables**, the app uses in-process memory (development only).
+The config file is created at `~/.config/shoufad/config` on first run. For a
+systemd deployment:
+
+```bash
+sudo server/zig-out/bin/shoufad service-install
+```
+
+or as a user service:
+
+```bash
+server/zig-out/bin/shoufad service-install
+```
+
+The service installer copies the binary and creates the unit. The frontend is
+already embedded, so there is nothing else to deploy.
+
+## Configuration
+
+See [`server/config.example`](./server/config.example).
+
+```ini
+bind = 127.0.0.1
+port = 8079
+max_memory_bytes = 5368709120
+max_request_bytes = 16777216
+sweep_interval_ms = 1000
+```
+
+The server should stay on `127.0.0.1` behind a TLS reverse proxy (Caddy, nginx,
+or Cloudflare Tunnel). There is no API token: the browser and API share an
+origin, and unsafe requests are checked for same-origin headers.
+
+Optional build-time canonical URL:
+
+```bash
+VITE_SITE_URL=https://shoufa.example.com pnpm build
+```
+
+## API
+
+- `POST /api/slugs` — create a room
+- `GET /api/:slug/exists`
+- `GET /api/:slug/status`
+- `GET /api/:slug/assets`
+- `POST /api/:slug/assets` — text or file/image as a data URL
+- `DELETE /api/:slug/assets/:id`
+- `DELETE /api/:slug`
+- `GET /wait?slug=...&rev=...` — room revision long-poll
+- `GET /health`
+
+File and image uploads are sent as JSON data URLs, so the frontend and backend
+share one simple JSON contract. No multipart parser is needed.
+
+## Security
+
+- Same-origin only; no API secret.
+- Cross-origin unsafe requests are rejected via `Origin` and `Sec-Fetch-Site`.
+- CSP, HSTS, `X-Content-Type-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, COOP/CORP, and frame denial are set by the Zig server.
+- Raw Redis protocol commands are not exposed.
+
+## Notes
+
+- Single node, non-persistent. Data is lost on restart.
+- Defaults: 5 GiB store, 5 MiB image limit, 1 hour max TTL.
+- See [`docs/architecture.md`](./docs/architecture.md) and
+  [`server/README.md`](./server/README.md).
 
 ## License
 

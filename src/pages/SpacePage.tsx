@@ -1,7 +1,5 @@
-"use client"
-
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { useRouter, useParams } from "next/navigation"
+import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
 import { GlassCard } from "@/components/GlassCard"
@@ -29,11 +27,9 @@ interface SpaceStatus {
   assetsCount: number
 }
 
-export default function SlugSpacePage() {
-  const router = useRouter()
-  const params = useParams()
+export default function SpacePage({ slug }: { slug: string }) {
+  const navigate = useNavigate()
   const { t } = useTranslation()
-  const slug = params.slug as string
 
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
@@ -125,16 +121,75 @@ export default function SlugSpacePage() {
     }
   }, [slug])
 
-  // Initial fetch + polling
+  // Initial fetch + change notifications.
+  //
+  // The browser long-polls the server's /wait endpoint, so the API is only
+  // called when the room actually changes. A slow safety poll remains as a
+  // fallback.
   useEffect(() => {
-    fetchAssets()
-    fetchStatus()
-    const interval = setInterval(() => {
+    let cancelled = false
+    let interval: ReturnType<typeof setInterval> | null = null
+    let waitController: AbortController | null = null
+    let revision: number | null = null
+    let retryDelay = 3_000
+
+    const refresh = () => {
+      if (document.hidden) return
       fetchAssets()
       fetchStatus()
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [fetchAssets, fetchStatus])
+    }
+
+    refresh()
+
+    interval = setInterval(refresh, 60_000)
+
+    const start = async () => {
+      // Initial call returns the current revision immediately.
+      while (!cancelled) {
+        waitController = new AbortController()
+        try {
+          const revParam = revision === null ? "" : `&rev=${revision}`
+          const res = await fetch(
+            `/wait?slug=${encodeURIComponent(slug)}${revParam}`,
+            { cache: "no-store", signal: waitController.signal },
+          )
+          if (!res.ok) throw new Error("wait failed")
+
+          const data = (await res.json()) as { rev?: number; changed?: boolean }
+          if (cancelled) return
+          retryDelay = 3_000
+
+          if (typeof data.rev === "number") {
+            const previous = revision
+            revision = data.rev
+            if (previous !== null && data.rev !== previous) refresh()
+          }
+        } catch {
+          if (cancelled) return
+          // Keep retrying with backoff; the safety poll still refreshes the
+          // room if /wait is unavailable.
+          await new Promise((resolve) => setTimeout(resolve, retryDelay))
+          retryDelay = Math.min(retryDelay * 2, 30_000)
+        }
+      }
+    }
+
+    start()
+
+    const onVisibility = () => {
+      if (!document.hidden) refresh()
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+    window.addEventListener("focus", onVisibility)
+
+    return () => {
+      cancelled = true
+      if (interval) clearInterval(interval)
+      waitController?.abort()
+      document.removeEventListener("visibilitychange", onVisibility)
+      window.removeEventListener("focus", onVisibility)
+    }
+  }, [slug, fetchAssets, fetchStatus])
 
   // Update remaining time for disappearing countdown
   useEffect(() => {
@@ -150,14 +205,14 @@ export default function SlugSpacePage() {
 
       if (remaining <= 0) {
         // Space has disappeared, go home
-        router.push("/")
+        navigate({ to: "/" })
       }
     }
 
     updateRemaining()
     const interval = setInterval(updateRemaining, 1000)
     return () => clearInterval(interval)
-  }, [spaceStatus, router])
+  }, [spaceStatus, navigate])
 
   // Copy link
   const handleCopyLink = useCallback(async () => {
@@ -220,7 +275,7 @@ export default function SlugSpacePage() {
               {t("space.notFoundDesc", { slug })}
             </p>
             <button
-              onClick={() => router.push("/")}
+              onClick={() => navigate({ to: "/" })}
               className="px-4 py-2 rounded-xl glass-control hover:brightness-[1.06] transition-all"
             >
               {t("space.goHome")}
@@ -240,7 +295,7 @@ export default function SlugSpacePage() {
         <div className="max-w-2xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => router.push("/")}
+              onClick={() => navigate({ to: "/" })}
               className="p-2 rounded-lg hover:bg-foreground/5 transition-all"
               title={t("space.goHome")}
             >

@@ -1,8 +1,6 @@
-"use client"
-
 import { useEffect, useCallback } from "react"
 import { cn } from "@/lib/utils"
-import { X, AlertTriangle } from "lucide-react"
+import { AlertTriangle } from "lucide-react"
 
 interface AlertDialogProps {
   open: boolean

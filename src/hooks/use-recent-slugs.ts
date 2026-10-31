@@ -1,6 +1,4 @@
-"use client";
-
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import {
   getRecentSlugs,
   addRecentSlug,
@@ -8,14 +6,7 @@ import {
 } from "@/lib/recent-slugs";
 
 export function useRecentSlugs() {
-  const [recentSlugs, setRecentSlugs] = useState<string[]>([]);
-  const [isLoaded, setIsLoaded] = useState(false);
-
-  // Load recent slugs from localStorage
-  useEffect(() => {
-    setRecentSlugs(getRecentSlugs());
-    setIsLoaded(true);
-  }, []);
+  const [recentSlugs, setRecentSlugs] = useState<string[]>(getRecentSlugs);
 
   const addSlug = useCallback((slug: string) => {
     const updated = addRecentSlug(slug);
@@ -27,5 +18,5 @@ export function useRecentSlugs() {
     setRecentSlugs(updated);
   }, []);
 
-  return { recentSlugs, addSlug, removeSlug, isLoaded };
+  return { recentSlugs, addSlug, removeSlug };
 }

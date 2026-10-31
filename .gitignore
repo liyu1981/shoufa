@@ -13,10 +13,6 @@
 # testing
 /coverage
 
-# next.js
-/.next/
-/out/
-
 # production
 /build
 
@@ -35,16 +31,16 @@ yarn-error.log*
 .env*
 !.env.example
 
-# upstash local cache
-.upstash/
-
-# vercel
-.vercel
-
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # zig / self-hosted server
 /server/zig-out/
 /server/.zig-cache/
+
+# generated embedded frontend assets
+/server/src/web_assets.zig
+/server/src/web/
+
+# dev orchestrator lock
+/.shoufa-dev.lock

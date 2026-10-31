@@ -1,6 +1,4 @@
-"use client"
-
-import { useTheme } from "next-themes"
+import { useTheme } from "@/components/ThemeProvider"
 import { useTranslation } from "react-i18next"
 import { useEffect, useState, useRef } from "react"
 import { cn } from "@/lib/utils"
@@ -9,15 +7,10 @@ import { Sun, Moon, Monitor, Globe, Check } from "lucide-react"
 export function ThemeToggle({ className }: { className?: string }) {
   const { theme, setTheme } = useTheme()
   const { i18n, t } = useTranslation()
-  const [mounted, setMounted] = useState(false)
   const [themeOpen, setThemeOpen] = useState(false)
   const [langOpen, setLangOpen] = useState(false)
   const themeRef = useRef<HTMLDivElement>(null)
   const langRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -32,10 +25,6 @@ export function ThemeToggle({ className }: { className?: string }) {
     document.addEventListener("mousedown", handleClick)
     return () => document.removeEventListener("mousedown", handleClick)
   }, [])
-
-  if (!mounted) {
-    return <div className={cn("w-20 h-9", className)} />
-  }
 
   const themes = [
     { value: "light", icon: Sun, label: t("theme.light") },

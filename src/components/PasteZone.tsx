@@ -1,6 +1,4 @@
-"use client"
-
-import { useCallback, useRef, useState, useEffect } from "react"
+import { useCallback, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
 import { isOptimizable } from "@/lib/image-optimize"
@@ -8,6 +6,7 @@ import { isImageFile } from "@/lib/file-type"
 import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon } from "lucide-react"
 import { AlertDialog } from "./AlertDialog"
 import { ImageOptimizeDialog } from "./ImageOptimizeDialog"
+import { getEffectiveMimeType } from "@/lib/file-type"
 
 /** Client-side upload limit (matches free-tier default). Server is authoritative. */
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024
@@ -21,6 +20,16 @@ interface PasteZoneProps {
 function isMobile(): boolean {
   if (typeof navigator === "undefined") return false
   return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+}
+
+/** Read a file as a data URL, preserving the effective MIME type. */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"))
+    reader.readAsDataURL(file)
+  })
 }
 
 /** Check whether the browser can actually decode this image type. */
@@ -45,7 +54,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [lastAction, setLastAction] = useState<"text" | "image" | null>(null)
-  const [isMobileDevice, setIsMobileDevice] = useState(false)
+  const [isMobileDevice] = useState(isMobile)
   const [error, setError] = useState<string | null>(null)
   const [textInput, setTextInput] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -54,25 +63,29 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const [optimizeFile, setOptimizeFile] = useState<File | null>(null)
   const [optimizeOpen, setOptimizeOpen] = useState(false)
 
-  useEffect(() => {
-    setIsMobileDevice(isMobile())
-  }, [])
-
   const handleTextSubmit = useCallback(async (text: string) => {
     if (!text.trim()) return
     setUploading(true)
+    setError(null)
     try {
       const res = await fetch(`/api/${slug}/assets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: text, ttl }),
       })
-      if (res.ok) {
+      const data = await res.json().catch(() => null)
+      if (res.ok && data?.ok) {
         setLastAction("text")
         setTextInput("")
         setTimeout(() => setLastAction(null), 1500)
         onAssetAdded()
+      } else {
+        setError(data?.error || "Failed to save text")
+        setTimeout(() => setError(null), 5000)
       }
+    } catch {
+      setError("Failed to save text")
+      setTimeout(() => setError(null), 5000)
     } finally {
       setUploading(false)
     }
@@ -82,20 +95,36 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     setUploading(true)
     setError(null)
     try {
-      const formData = new FormData()
-      formData.append("file", file)
-      formData.append("ttl", String(ttl))
+      const mimeType = getEffectiveMimeType(file)
+      const normalized =
+        file.type === mimeType
+          ? file
+          : new File([file], file.name, {
+              type: mimeType || "application/octet-stream",
+              lastModified: file.lastModified,
+            })
+      const dataUrl = await fileToDataUrl(normalized)
+      const isImage = mimeType.startsWith("image/")
+
       const res = await fetch(`/api/${slug}/assets`, {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: isImage ? "image" : "file",
+          data: dataUrl,
+          mimeType: mimeType || undefined,
+          fileName: file.name,
+          size: file.size,
+          ttl,
+        }),
       })
-      const data = await res.json()
-      if (data.ok) {
+      const data = await res.json().catch(() => null)
+      if (res.ok && data?.ok) {
         setLastAction("image")
         setTimeout(() => setLastAction(null), 1500)
         onAssetAdded()
       } else {
-        setError(data.error || "Upload failed")
+        setError(data?.error || "Upload failed")
         setTimeout(() => setError(null), 5000)
       }
     } catch {

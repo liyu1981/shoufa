@@ -2,7 +2,7 @@
 //!
 //! Runs as a system service when executed as root, and as a per-user service
 //! otherwise. Both modes copy the running binary, provision a config with a
-//! generated API key, write the unit, and enable/start it.
+//! config, write the unit, and enable/start it.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -82,7 +82,7 @@ pub fn install(init: std.process.Init, args: []const []const u8) !void {
 
     const exe_path = try std.process.executablePathAlloc(io, arena);
     try installBinary(io, &options, exe_path);
-    const generated_token = try installConfig(io, gpa, arena, &options);
+    const created_config = try installConfig(io, gpa, arena, &options);
 
     try writeFile(io, unit_path, unit, 0o644);
     std.log.info("wrote systemd unit: {s}", .{unit_path});
@@ -107,13 +107,8 @@ pub fn install(init: std.process.Init, args: []const []const u8) !void {
     std.log.info("scope: {s}", .{scopeLabel(options.scope)});
     std.log.info("binary: {s}", .{options.binary});
     std.log.info("config: {s}", .{options.config});
-    if (generated_token) |token| {
-        std.log.info("API key: {s}", .{token});
-        std.log.info("set SHOUFA_REDIS_REST_URL=http://127.0.0.1:8079", .{});
-        std.log.info("set SHOUFA_REDIS_REST_TOKEN={s}", .{token});
-    } else {
-        std.log.info("API key unchanged (existing config was kept)", .{});
-    }
+    std.log.info("config state: {s}", .{if (created_config) "created" else "kept existing"});
+    std.log.info("frontend: served from the embedded web assets", .{});
     const status_hint = try std.fmt.allocPrint(arena, "{s} status {s}", .{
         systemctlPrefix(options.scope), unit_name,
     });
@@ -320,7 +315,7 @@ fn installConfig(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
     options: *const Options,
-) !?[]const u8 {
+) !bool {
     if (std.fs.path.dirname(options.config)) |dir| {
         if (dir.len > 0) {
             const dir_existed = existsAbsolute(io, dir);
@@ -334,14 +329,14 @@ fn installConfig(
     }
 
     const config_exists = existsAbsolute(io, options.config);
-    var generated_token: ?[]const u8 = null;
+    var created_config = false;
     if (!config_exists or options.force) {
         if (config_exists) {
-            std.log.warn("overwriting existing config (--force); the API key will rotate", .{});
+            std.log.warn("overwriting existing config (--force)", .{});
         }
-        const generated = try config.generate(arena, io);
-        try writeFile(io, options.config, generated.text, 0o600);
-        generated_token = generated.token;
+        const generated = try config.generate(arena);
+        try writeFile(io, options.config, generated, 0o600);
+        created_config = true;
         std.log.info("created config: {s}", .{options.config});
     } else {
         std.log.info("keeping existing config: {s}", .{options.config});
@@ -353,7 +348,7 @@ fn installConfig(
         try runChecked(io, gpa, &chown_argv);
     }
     try runChmod(io, gpa, options.config, 0o600);
-    return generated_token;
+    return created_config;
 }
 
 fn buildUnit(arena: std.mem.Allocator, options: *const Options) ![]const u8 {
@@ -361,7 +356,7 @@ fn buildUnit(arena: std.mem.Allocator, options: *const Options) ![]const u8 {
         .system => std.fmt.allocPrint(arena,
             \\# Managed by `shoufad service-install`. Re-run that command to update.
             \\[Unit]
-            \\Description=Shoufa self-hosted Redis-compatible server
+            \\Description=Shoufa self-hosted server
             \\After=network-online.target
             \\Wants=network-online.target
             \\
@@ -385,7 +380,7 @@ fn buildUnit(arena: std.mem.Allocator, options: *const Options) ![]const u8 {
         .user => std.fmt.allocPrint(arena,
             \\# Managed by `shoufad service-install`. Re-run that command to update.
             \\[Unit]
-            \\Description=Shoufa self-hosted Redis-compatible server (user)
+            \\Description=Shoufa self-hosted server (user)
             \\After=network-online.target
             \\Wants=network-online.target
             \\
@@ -416,9 +411,9 @@ fn printPlan(
     unit: []const u8,
 ) !void {
     const config_action = if (existsAbsolute(io, options.config))
-        "keep existing config (API key unchanged)"
+        "keep existing config"
     else
-        "create config with a new API key";
+        "create config";
     const prefix = if (options.scope == .user) "systemctl --user" else "systemctl";
     const reload = try std.fmt.allocPrint(arena, "{s} daemon-reload", .{prefix});
     const start_command = if (options.no_start)
@@ -576,7 +571,7 @@ pub fn printUsage(io: std.Io) !void {
         \\  shoufad service-install [options]
         \\
         \\Commands:
-        \\  (none)          Run the Redis-compatible server
+        \\  (none)          Run the Shoufa server
         \\  service-install Install/update the systemd service (Linux only)
         \\
         \\service-install options:
@@ -589,7 +584,7 @@ pub fn printUsage(io: std.Io) !void {
         \\  --service NAME  systemd unit name (default shoufad)
         \\  --user NAME     Service user for --scope system (default shoufad)
         \\  --no-start      Enable at boot but do not start/restart now
-        \\  --force         Overwrite an existing config (rotates the API key)
+        \\  --force         Overwrite an existing config
         \\  --dry-run, -n   Print the planned install without changing the system
         \\  -h, --help      Show this help
         \\

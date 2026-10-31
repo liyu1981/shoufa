@@ -15,7 +15,7 @@
       "placeholder": "slug",
       "generate": "生成"
     },
-    "footer": "内容 5 分钟后自动过期 · 无需注册"
+    "footer": "内容自动过期 · 无需注册"
   },
   "space": {
     "notFound": "空间不存在",

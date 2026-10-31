@@ -1,7 +1,5 @@
-"use client"
-
 import { useState, useCallback, useRef, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { useNavigate } from "@tanstack/react-router"
 import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
 import { GlassCard } from "@/components/GlassCard"
@@ -11,7 +9,7 @@ import { useRecentSlugs } from "@/hooks/use-recent-slugs"
 import { Zap, Link2, ArrowRight, Loader2, Clock, X } from "lucide-react"
 
 export default function HomePage() {
-  const router = useRouter()
+  const navigate = useNavigate()
   const { t } = useTranslation()
   const { recentSlugs, addSlug, removeSlug } = useRecentSlugs()
   const [customSlug, setCustomSlug] = useState("")
@@ -45,7 +43,7 @@ export default function HomePage() {
       const data = await res.json()
       if (data.ok) {
         addSlug(slug)
-        router.push(`/s/${slug}`)
+        navigate({ to: "/s/$slug", params: { slug } })
       } else {
         setError("Space not found. Create a new one?")
       }
@@ -54,18 +52,22 @@ export default function HomePage() {
     } finally {
       setJoining(false)
     }
-  }, [customSlug, router, addSlug])
+  }, [customSlug, navigate, addSlug])
 
   // Create new slug
   const handleCreate = useCallback(async () => {
     setCreating(true)
     setError(null)
     try {
-      const res = await fetch("/api/slugs", { method: "POST" })
+      const res = await fetch("/api/slugs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      })
       const data = await res.json()
       if (data.ok) {
         addSlug(data.data.slug)
-        router.push(`/s/${data.data.slug}`)
+        navigate({ to: "/s/$slug", params: { slug: data.data.slug } })
       } else {
         setError(data.error || "Failed to create space")
       }
@@ -74,7 +76,7 @@ export default function HomePage() {
     } finally {
       setCreating(false)
     }
-  }, [router, addSlug])
+  }, [navigate, addSlug])
 
   // Create custom slug
   const handleCreateCustom = useCallback(async () => {
@@ -92,7 +94,7 @@ export default function HomePage() {
       const data = await res.json()
       if (data.ok) {
         addSlug(slug)
-        router.push(`/s/${slug}`)
+        navigate({ to: "/s/$slug", params: { slug } })
       } else {
         setError(data.error || "Failed to create space")
       }
@@ -101,7 +103,7 @@ export default function HomePage() {
     } finally {
       setCreating(false)
     }
-  }, [customSlug, router, addSlug])
+  }, [customSlug, navigate, addSlug])
 
   // Handle Enter key
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -131,37 +133,8 @@ export default function HomePage() {
     ? recentSlugs.filter((s) => s.includes(customSlug.trim().toLowerCase()))
     : recentSlugs
 
-  // JSON-LD structured data for search engines
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "WebApplication",
-    name: "Shoufa",
-    alternateName: "Shoufa — Paste, Share, Disappear",
-    url: process.env.NEXT_PUBLIC_SITE_URL || "https://shoufa.vercel.app",
-    applicationCategory: "UtilitiesApplication",
-    operatingSystem: "Any",
-    description:
-      "Ephemeral clipboard with a time limit. Paste text or images, share a memorable link, and it auto-expires. No signup needed.",
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "USD",
-    },
-    featureList: [
-      "Paste text with auto-expiry",
-      "Upload images with self-destructing links",
-      "Memorable shareable links like bright-fox",
-      "No signup or account required",
-      "Works on mobile and desktop",
-    ],
-  }
-
   return (
     <div className="ambient-bg min-h-screen w-full overflow-x-clip">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
       <AmbientBackground />
 
       <main className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4 py-12">

@@ -75,6 +75,8 @@ pub const Store = struct {
     io: std.Io,
     mutex: std.Io.Mutex = .init,
     map: std.StringHashMapUnmanaged(Entry) = .empty,
+    /// Per-room revision counters used by the long-poll notification endpoint.
+    revisions: std.StringHashMapUnmanaged(u64) = .empty,
     used_bytes: usize = 0,
     max_bytes: usize,
     sweep_interval_ms: u64,
@@ -102,6 +104,9 @@ pub const Store = struct {
         self.lock();
         self.flushLocked();
         self.map.deinit(self.gpa);
+        var revisions = self.revisions.iterator();
+        while (revisions.next()) |entry| self.gpa.free(entry.key_ptr.*);
+        self.revisions.deinit(self.gpa);
         self.unlock();
     }
 
@@ -136,6 +141,7 @@ pub const Store = struct {
 
     fn removeKeyLocked(self: *Store, key: []const u8) bool {
         const kv = self.map.fetchRemove(key) orelse return false;
+        self.bumpKeyLocked(kv.key);
         self.used_bytes -|= kv.value.bytes;
         self.freeValue(kv.value.value);
         self.gpa.free(kv.key);
@@ -147,6 +153,61 @@ pub const Store = struct {
         if (!isExpired(entry, self.now())) return false;
         if (self.removeKeyLocked(key)) self.expired_count += 1;
         return true;
+    }
+
+    fn revisionKey(key: []const u8) ?[]const u8 {
+        if (!std.mem.startsWith(u8, key, "slug:")) return null;
+        if (std.mem.endsWith(u8, key, ":assets")) {
+            return key[0 .. key.len - ":assets".len];
+        }
+        return key;
+    }
+
+    fn bumpKeyLocked(self: *Store, key: []const u8) void {
+        const base = revisionKey(key) orelse return;
+
+        if (self.revisions.getPtr(base)) |current_revision| {
+            current_revision.* +%= 1;
+            return;
+        }
+
+        const owned = self.gpa.dupe(u8, base) catch return;
+        self.revisions.put(self.gpa, owned, 1) catch {
+            self.gpa.free(owned);
+        };
+    }
+
+    fn revisionLocked(self: *Store, slug: []const u8) u64 {
+        var buffer: [128]u8 = undefined;
+        const key = std.fmt.bufPrint(&buffer, "slug:{s}", .{slug}) catch return 0;
+        return self.revisions.get(key) orelse 0;
+    }
+
+    pub fn revision(self: *Store, slug: []const u8) u64 {
+        self.lock();
+        defer self.unlock();
+        return self.revisionLocked(slug);
+    }
+
+    /// Blocks until the room revision differs from `since` or the timeout
+    /// expires. Used by the browser-facing long-poll endpoint.
+    pub fn waitForRevision(self: *Store, slug: []const u8, since: u64, timeout_ms: u64) u64 {
+        const deadline = nowMs(self.io) + @as(i64, @intCast(timeout_ms));
+
+        while (true) {
+            self.lock();
+            const current = self.revisionLocked(slug);
+            self.unlock();
+
+            if (current != since) return current;
+
+            const now_ms = nowMs(self.io);
+            if (now_ms >= deadline) return current;
+
+            const remaining = deadline - now_ms;
+            const sleep_ms: u64 = @intCast(@min(@as(i64, 250), remaining));
+            std.Io.sleep(self.io, std.Io.Duration.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
+        }
     }
 
     fn freeValue(self: *Store, value: Value) void {
@@ -225,6 +286,9 @@ pub const Store = struct {
     }
 
     fn flushLocked(self: *Store) void {
+        var revisions = self.revisions.iterator();
+        while (revisions.next()) |entry| entry.value_ptr.* +%= 1;
+
         var it = self.map.iterator();
         while (it.next()) |e| {
             self.freeValue(e.value_ptr.value);
@@ -273,6 +337,7 @@ pub const Store = struct {
         }
         const delta_ms = std.math.mul(i64, seconds, 1000) catch std.math.maxInt(i64);
         entry.expires_at_ms = self.now() +| delta_ms;
+        self.bumpKeyLocked(key);
         return 1;
     }
 
@@ -284,6 +349,8 @@ pub const Store = struct {
         entry.expires_at_ms = at_ms;
         if (at_ms <= self.now()) {
             _ = self.removeKeyLocked(key);
+        } else {
+            self.bumpKeyLocked(key);
         }
         return 1;
     }
@@ -322,6 +389,7 @@ pub const Store = struct {
         const entry = self.map.getPtr(key) orelse return 0;
         if (entry.expires_at_ms == null) return 0;
         entry.expires_at_ms = null;
+        self.bumpKeyLocked(key);
         return 1;
     }
 
@@ -410,6 +478,8 @@ pub const Store = struct {
             });
             self.used_bytes = projected;
         }
+
+        self.bumpKeyLocked(key);
         return .ok;
     }
 
@@ -448,6 +518,7 @@ pub const Store = struct {
                 e.value = .{ .string = text };
                 e.bytes = new_bytes;
                 self.used_bytes = projected;
+                self.bumpKeyLocked(key);
                 return updated;
             },
             .hash => return error.WrongType,
@@ -464,6 +535,7 @@ pub const Store = struct {
             .bytes = bytes,
         });
         self.used_bytes += bytes;
+        self.bumpKeyLocked(key);
         return delta;
     }
 
@@ -543,6 +615,7 @@ pub const Store = struct {
 
             entry.bytes = entryBytes(key.len, new_hash_bytes);
             self.used_bytes = projected;
+            self.bumpKeyLocked(key);
             return .{ .added = added };
         }
 
@@ -573,6 +646,7 @@ pub const Store = struct {
             .bytes = entryBytes(key.len, new_hash_bytes),
         });
         self.used_bytes = projected;
+        self.bumpKeyLocked(key);
         return .{ .added = added };
     }
 
@@ -646,6 +720,7 @@ pub const Store = struct {
 
                 if (hash.count() == 0) {
                     const kv = self.map.fetchRemove(key).?;
+                    self.bumpKeyLocked(kv.key);
                     self.used_bytes -|= kv.value.bytes;
                     self.gpa.free(kv.key);
                     var empty_hash = kv.value.value.hash;
@@ -653,6 +728,7 @@ pub const Store = struct {
                 } else {
                     entry.bytes -|= removed_bytes;
                     self.used_bytes -|= removed_bytes;
+                    if (removed > 0) self.bumpKeyLocked(key);
                 }
                 return removed;
             },

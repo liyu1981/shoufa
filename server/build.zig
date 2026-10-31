@@ -13,6 +13,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const gen_web = b.addSystemCommand(&.{ "node", "../scripts/generate-web-assets.mjs" });
+    exe.step.dependOn(&gen_web.step);
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

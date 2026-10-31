@@ -1,5 +1,3 @@
-"use client"
-
 import { useEffect, useRef } from "react"
 
 interface Blob {
@@ -24,7 +22,7 @@ function paletteFor(isDark: boolean, reducedTransparency: boolean) {
   }
 }
 
-function createBlob(w: number, h: number, palette: ReturnType<typeof paletteFor>): Blob {
+function createBlob(w: number, h: number, _palette: ReturnType<typeof paletteFor>): Blob {
   const minDim = Math.min(w, h)
   return {
     x: Math.random() * w,
