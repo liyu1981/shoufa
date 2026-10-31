@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createSlug, slugExists, isSlugTaken } from "@/lib/store"
+import { getStorageProviderInfo } from "@/lib/storage"
 import { generateSlug, isValidSlug } from "@/lib/slugs"
 
 // Force dynamic for this route
@@ -41,8 +42,7 @@ export async function POST(req: NextRequest) {
     console.error("Error details:", {
       message: error instanceof Error ? error.message : "Unknown error",
       stack: error instanceof Error ? error.stack : undefined,
-      redisUrl: process.env.UPSTASH_REDIS_REST_URL ? "SET" : "NOT SET",
-      redisToken: process.env.UPSTASH_REDIS_REST_TOKEN ? "SET" : "NOT SET",
+      storage: getStorageProviderInfo(),
     })
     return NextResponse.json(
       { ok: false, error: "Failed to create slug" },

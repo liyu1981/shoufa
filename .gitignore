@@ -33,6 +33,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # upstash local cache
 .upstash/
@@ -43,3 +44,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# zig / self-hosted server
+/server/zig-out/
+/server/.zig-cache/

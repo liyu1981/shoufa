@@ -1,8 +1,12 @@
-// Hybrid store: Redis mock (local dev) or Upstash Redis (production)
-// Mock emulates real Redis commands to catch serialization issues early
+// Storage layer for ephemeral spaces.
+//
+// The concrete backend is selected by src/lib/storage/index.ts:
+//   - self-hosted Zig Redis REST server (SHOUFA_REDIS_REST_URL/TOKEN)
+//   - Upstash/cloud Redis (UPSTASH_REDIS_REST_URL/TOKEN)
+//   - in-process memory mock (development fallback)
 
 import { nanoid } from "nanoid"
-import { getRedisMock, RedisMock } from "./redis-mock"
+import { getRedisAdapter } from "./storage"
 import { limits } from "./config"
 
 export interface Asset {
@@ -28,39 +32,6 @@ export interface SlugMeta {
 // Grace period: 15 minutes after last asset is removed
 export const SPACE_GRACE_PERIOD = 15 * 60 // seconds
 
-// ============================================================
-// Mode detection
-// ============================================================
-
-function isUpstashRedis(): boolean {
-  return !!process.env.UPSTASH_REDIS_REST_URL && !!process.env.UPSTASH_REDIS_REST_TOKEN
-}
-
-// ============================================================
-// Redis clients (lazy initialization)
-// ============================================================
-
-let mockRedis: RedisMock | null = null
-let upstashRedis: any = null
-
-async function getRedis() {
-  if (isUpstashRedis()) {
-    if (!upstashRedis) {
-      const { Redis } = await import("@upstash/redis")
-      upstashRedis = new Redis({
-        url: process.env.UPSTASH_REDIS_REST_URL!,
-        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-      })
-    }
-    return upstashRedis
-  } else {
-    if (!mockRedis) {
-      mockRedis = getRedisMock()
-    }
-    return mockRedis
-  }
-}
-
 // Key patterns
 const slugKey = (slug: string) => `slug:${slug}`
 const assetsKey = (slug: string) => `slug:${slug}:assets`
@@ -70,27 +41,26 @@ const assetsKey = (slug: string) => `slug:${slug}:assets`
 // ============================================================
 
 export async function slugExists(slug: string): Promise<boolean> {
-  const r = await getRedis()
+  const r = await getRedisAdapter()
   const exists = await r.exists(slugKey(slug))
   return exists === 1
 }
 
 export async function createSlug(slug: string): Promise<SlugMeta> {
-  const r = await getRedis()
+  const r = await getRedisAdapter()
   const meta: SlugMeta = { slug, createdAt: Date.now() }
 
-  if (r instanceof RedisMock) {
-    await r.hset(slugKey(slug), "slug", slug, "createdAt", String(meta.createdAt))
-  } else {
-    await r.hset(slugKey(slug), meta)
-  }
+  await r.hset(slugKey(slug), {
+    slug,
+    createdAt: String(meta.createdAt),
+  })
 
   await r.expire(slugKey(slug), 3600)
   return meta
 }
 
 export async function getSlug(slug: string): Promise<SlugMeta | null> {
-  const r = await getRedis()
+  const r = await getRedisAdapter()
   const meta = await r.hgetall(slugKey(slug))
 
   if (!meta || Object.keys(meta).length === 0) return null
@@ -108,7 +78,7 @@ export async function getSlug(slug: string): Promise<SlugMeta | null> {
 }
 
 export async function deleteSlug(slug: string): Promise<boolean> {
-  const r = await getRedis()
+  const r = await getRedisAdapter()
   const existed = await r.exists(slugKey(slug))
   await r.del(slugKey(slug), assetsKey(slug))
   return existed === 1
@@ -123,7 +93,7 @@ export async function getSpaceStatus(slug: string): Promise<{
   disappearAt: number | null
   assetsCount: number
 }> {
-  const r = await getRedis()
+  const r = await getRedisAdapter()
   const exists = await r.exists(slugKey(slug))
 
   if (!exists) {
@@ -186,27 +156,18 @@ export async function addAsset(
   }
 
   try {
-    const r = await getRedis()
+    const r = await getRedisAdapter()
     const exists = await r.exists(slugKey(slug))
     if (!exists) return null
 
     const assetJson = JSON.stringify(fullAsset)
     const keyTTL = Math.ceil(asset.ttl) + 60
 
-    if (r instanceof RedisMock) {
-      await r.hset(assetsKey(slug), id, assetJson)
-    } else {
-      await r.hset(assetsKey(slug), { [id]: assetJson })
-    }
-
+    await r.hset(assetsKey(slug), { [id]: assetJson })
     await r.expire(assetsKey(slug), keyTTL)
 
     // Clear emptySince since we now have an asset
-    if (r instanceof RedisMock) {
-      await r.hdel(slugKey(slug), "emptySince")
-    } else {
-      await r.hset(slugKey(slug), { emptySince: "" })
-    }
+    await r.hdel(slugKey(slug), "emptySince")
 
     // Extend slug TTL
     await r.expire(slugKey(slug), Math.max(keyTTL, 3600))
@@ -220,7 +181,7 @@ export async function addAsset(
 
 export async function getAssets(slug: string): Promise<Asset[]> {
   try {
-    const r = await getRedis()
+    const r = await getRedisAdapter()
     const raw = await r.hgetall(assetsKey(slug))
 
     if (!raw || typeof raw !== "object" || Object.keys(raw).length === 0) {
@@ -255,7 +216,7 @@ export async function getAssets(slug: string): Promise<Asset[]> {
 }
 
 export async function deleteAsset(slug: string, assetId: string): Promise<boolean> {
-  const r = await getRedis()
+  const r = await getRedisAdapter()
   const deleted = await r.hdel(assetsKey(slug), assetId)
 
   if (deleted > 0) {
@@ -266,11 +227,7 @@ export async function deleteAsset(slug: string, assetId: string): Promise<boolea
     if (assetCount === 0) {
       // Space is now empty - start grace period
       const now = Date.now()
-      if (r instanceof RedisMock) {
-        await r.hset(slugKey(slug), "emptySince", String(now))
-      } else {
-        await r.hset(slugKey(slug), { emptySince: now })
-      }
+      await r.hset(slugKey(slug), { emptySince: now })
       // Set TTL for the grace period + buffer
       await r.expire(slugKey(slug), SPACE_GRACE_PERIOD + 60)
     }

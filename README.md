@@ -19,12 +19,22 @@ An ephemeral clipboard with a time limit. Paste text or images, share the link, 
 - **TypeScript**
 - **Tailwind CSS v4** + Apple glass design system
 - **Jotai** for state management
-- **Upstash Redis** for serverless storage (Vercel)
-- **In-memory store** for local development
+- **Pluggable Redis storage** — self-hosted Zig server, Upstash, or in-memory
+- **Zig 0.17+** self-hosted Redis-compatible REST server
 
-## Development
+## Storage backends
 
-```bash
+`src/lib/storage/` contains one adapter interface and three implementations. The
+runtime picks the first configured backend:
+
+1. **Self-hosted** — `SHOUFA_REDIS_REST_URL` + `SHOUFA_REDIS_REST_TOKEN`
+2. **Upstash / cloud fallback** — `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`
+3. **In-process memory** — development fallback when neither is configured
+
+Self-hosted always wins when both are present, so production can prefer your own
+server while keeping the cloud variables as a fallback for other environments.
+See [`docs/self-hosted-redis.md`](./docs/self-hosted-redis.md) and
+[`server/README.md`](./server/README.md).
 
 ## Development
 
@@ -32,7 +42,12 @@ An ephemeral clipboard with a time limit. Paste text or images, share the link, 
 # Install dependencies
 pnpm install
 
-# Get a free temporary Upstash Redis (no account needed)
+# Option A: self-hosted Zig server (recommended, no account needed)
+pnpm redis:selfhost
+# First run creates ~/.config/shoufad/config with a random API key.
+# Copy that key into SHOUFA_REDIS_REST_TOKEN below.
+
+# Option B: temporary Upstash Redis (no account needed)
 pnpm redis
 
 # Start dev server (HTTPS, port 3210)
@@ -41,11 +56,46 @@ pnpm dev
 # Open https://localhost:3210
 ```
 
-**Note:** Local dev uses a real Upstash Redis instance (same as production). Data persists for 3 days. To use in-memory mode instead, comment out the env vars in `.env.local`.
+For self-hosted local development, add to `.env.local`:
+
+```bash
+SHOUFA_REDIS_REST_URL=http://127.0.0.1:8079
+SHOUFA_REDIS_REST_TOKEN=sfr_your-generated-key
+```
+
+If no storage env vars are set, the app uses the in-memory mock. Data resets on
+restart and is not shared between processes, so use a real backend for anything
+beyond local development.
 
 ## Deployment
 
-### Vercel (Recommended)
+### Self-hosted Zig Redis (recommended for cost control)
+
+1. Build the server:
+   ```bash
+   pnpm redis:selfhost:build
+   ```
+2. Install it as a systemd service:
+   ```bash
+   sudo server/zig-out/bin/shoufad service-install
+   ```
+   This copies the binary to `/usr/local/bin/shoufad`, creates a `shoufad`
+   service user, writes `/etc/shoufad/config` with a generated API key, installs
+   `/etc/systemd/system/shoufad.service`, and starts it. Use `--dry-run` first to
+   preview the changes.
+3. Re-run the same command after rebuilding to update the binary/service. The
+   existing config and API key are kept unless you pass `--force`.
+4. Set these on your app host / Vercel project:
+   ```bash
+   SHOUFA_REDIS_REST_URL=https://redis.your-domain.com
+   SHOUFA_REDIS_REST_TOKEN=sfr_your-key
+   ```
+   Keep the server behind TLS if the app is off-host.
+
+The server keeps everything in memory with a hard 5 GiB cap and proactively
+reclaims memory for expired keys. It is single-node and non-persistent by design.
+
+### Vercel + Upstash (cloud fallback)
 
 1. **Create Upstash Redis:**
    - Go to [Upstash Console](https://console.upstash.com)
@@ -61,6 +111,10 @@ pnpm dev
    vercel env add UPSTASH_REDIS_REST_URL
    vercel env add UPSTASH_REDIS_REST_TOKEN
 
+   # Optional: self-hosted takes precedence if these are also set
+   vercel env add SHOUFA_REDIS_REST_URL
+   vercel env add SHOUFA_REDIS_REST_TOKEN
+
    # Deploy to production
    vercel --prod
    ```
@@ -68,44 +122,12 @@ pnpm dev
 Or connect via Vercel Dashboard:
 1. Push to GitHub
 2. Import project in Vercel
-3. Add environment variables from Upstash
+3. Add environment variables from Upstash and/or the self-hosted server
 
 ### Other Platforms (AWS, Google Cloud, DigitalOcean, etc.)
 
-Any platform that supports Node.js will work. You just need a Redis server for storage.
-
-#### 1. Set up a Redis server
-
-**Option A: Managed Redis (easiest)**
-- [Upstash](https://upstash.com) — Serverless, pay-per-request
-- [Redis Cloud](https://redis.com/redis-enterprise/cloud) — Free tier available
-- [Amazon ElastiCache](https://aws.amazon.com/elasticache/) — AWS managed
-
-**Option B: Self-hosted Redis**
-```bash
-# On your server
-sudo apt install redis-server
-sudo systemctl enable redis-server
-
-# Verify it's running
-redis-cli ping
-# Should return: PONG
-```
-
-#### 2. Configure environment variables
-
-Set these on your hosting platform:
-
-```bash
-UPSTASH_REDIS_REST_URL=https://your-redis-instance.com
-UPSTASH_REDIS_REST_TOKEN=your-token
-```
-
-For self-hosted Redis with REST API, use [Lettuce](https://lettuce.io) or [Redis with a REST proxy](https://github.com/nicholasgasior/redis-rest-proxy).
-
-If your Redis uses the standard protocol (not REST), you'll need to modify `src/lib/store.ts` to use a Redis client like `ioredis`.
-
-#### 3. Deploy
+Any platform that supports Node.js will work. Point it at either a self-hosted
+`shoufad` instance or an Upstash-compatible REST endpoint.
 
 ```bash
 # Build
@@ -118,11 +140,14 @@ pnpm start -p 3000
 ### Environment Variables
 
 | Variable | Required | Description |
-|----------|----------|-------------|
-| `UPSTASH_REDIS_REST_URL` | For storage | Redis REST URL |
-| `UPSTASH_REDIS_REST_TOKEN` | For storage | Redis REST token |
+| --- | --- | --- |
+| `SHOUFA_REDIS_REST_URL` | For self-hosted | Self-hosted server base URL |
+| `SHOUFA_REDIS_REST_TOKEN` | For self-hosted | API key from `~/.config/shoufad/config` (manual run) or `/etc/shoufad/config` (systemd install) |
+| `UPSTASH_REDIS_REST_URL` | For cloud | Upstash-compatible REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | For cloud | Upstash REST token |
+| `UPSTASH_TIER` | Optional | `free` (default), `pro`, or `enterprise` limits |
 
-**Without these variables**, the app uses in-memory storage (data resets on restart).
+**Without any storage variables**, the app uses in-process memory (development only).
 
 ## License
 

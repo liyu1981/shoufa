@@ -52,7 +52,7 @@ export class RedisMock {
   // Hash commands
   // ============================================================
 
-  async hset(key: string, ...args: (string | Record<string, string>)[]): Promise<number> {
+  async hset(key: string, ...args: (string | Record<string, string | number>)[]): Promise<number> {
     this.cleanup()
     let added = 0
 

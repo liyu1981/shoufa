@@ -1,5 +1,8 @@
-// Upstash Redis tier configuration
-// Defaults to free tier limits, override via UPSTASH_LIMITS env var
+// Storage tier configuration shared by all backends.
+//
+// Defaults to conservative free-tier limits so the app behaves safely on
+// Upstash. Override with UPSTASH_TIER / UPSTASH_LIMITS. The self-hosted Zig
+// server has its own independent max_memory_bytes cap (see server/README.md).
 
 export interface UpstashLimits {
   /** Max commands per second */
@@ -96,9 +99,9 @@ export function limits(): UpstashLimits {
 }
 
 // Human-readable format for display
-export function formatLimits(): string {
+export function formatLimits(tier: string = process.env.UPSTASH_TIER || "free"): string {
   const l = limits()
-  return `Tier: ${process.env.UPSTASH_TIER || "free"} | ` +
+  return `Tier: ${tier} | ` +
     `Commands: ${l.commandsPerSecond}/s | ` +
     `Max image: ${formatBytes(l.maxImageSize)} | ` +
     `Max TTL: ${l.maxTtl}s | ` +

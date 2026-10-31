@@ -1,0 +1,379 @@
+//! `shoufad service-install` — install/update the systemd unit on Linux.
+//!
+//! The command is intentionally self-contained: it copies the running binary,
+//! creates a service user and config, writes the unit, then enables/starts it.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const config = @import("config.zig");
+
+const DEFAULT_BINARY = "/usr/local/bin/shoufad";
+const DEFAULT_CONFIG = "/etc/shoufad/config";
+const DEFAULT_SERVICE = "shoufad";
+const DEFAULT_USER = "shoufad";
+
+const Options = struct {
+    binary: []const u8 = DEFAULT_BINARY,
+    config: []const u8 = DEFAULT_CONFIG,
+    service_name: []const u8 = DEFAULT_SERVICE,
+    user: []const u8 = DEFAULT_USER,
+    no_start: bool = false,
+    force: bool = false,
+    dry_run: bool = false,
+    help: bool = false,
+};
+
+pub fn install(init: std.process.Init, args: []const []const u8) !void {
+    const arena = init.arena.allocator();
+    const io = init.io;
+    const gpa = init.gpa;
+
+    const options = try parseOptions(args);
+    if (options.help) {
+        try printUsage(io);
+        return;
+    }
+
+    if (builtin.os.tag != .linux) {
+        std.log.err("service-install is only supported on Linux", .{});
+        return error.UnsupportedPlatform;
+    }
+    try validateOptions(&options);
+
+    const unit_name = try std.fmt.allocPrint(arena, "{s}.service", .{options.service_name});
+    const unit_path = try std.fmt.allocPrint(arena, "/etc/systemd/system/{s}", .{unit_name});
+    const unit = try buildUnit(arena, &options);
+
+    if (options.dry_run) {
+        const exe_path = try std.process.executablePathAlloc(io, arena);
+        try printPlan(io, arena, &options, exe_path, unit_name, unit_path, unit);
+        return;
+    }
+
+    if (!isRoot()) {
+        std.log.err("service-install must be run as root (try: sudo shoufad service-install)", .{});
+        return error.NotRoot;
+    }
+    if (std.Io.Dir.accessAbsolute(io, "/run/systemd/system", .{})) |_| {} else |_| {
+        std.log.err("systemd does not appear to be running (missing /run/systemd/system)", .{});
+        return error.SystemdUnavailable;
+    }
+
+    // 1. Service user. root needs no creation.
+    if (!std.mem.eql(u8, options.user, "root")) {
+        if (!userExists(io, gpa, options.user)) {
+            std.log.info("creating system user: {s}", .{options.user});
+            const argv = [_][]const u8{
+                "useradd",
+                "--system",
+                "--user-group",
+                "--no-create-home",
+                "--home-dir",
+                "/nonexistent",
+                "--shell",
+                "/usr/sbin/nologin",
+                options.user,
+            };
+            try runChecked(io, gpa, &argv);
+        }
+    }
+
+    // 2. Install the binary.
+    const exe_path = try std.process.executablePathAlloc(io, arena);
+    if (!std.mem.eql(u8, exe_path, options.binary)) {
+        if (std.fs.path.dirname(options.binary)) |dir| {
+            try std.Io.Dir.cwd().createDirPath(io, dir);
+        }
+        std.log.info("installing binary: {s} -> {s}", .{ exe_path, options.binary });
+        try std.Io.Dir.copyFileAbsolute(exe_path, options.binary, io, .{
+            .permissions = @fromBackingInt(@intCast(0o755)),
+            .replace = true,
+        });
+    }
+
+    // 3. Config. Keep an existing file unless --force is used.
+    if (std.fs.path.dirname(options.config)) |dir| {
+        if (dir.len > 0) {
+            const dir_existed = existsAbsolute(io, dir);
+            try std.Io.Dir.cwd().createDirPath(io, dir);
+            // Only relax permissions on a directory we just created. Never
+            // chmod pre-existing system directories such as /etc.
+            if (!dir_existed and !std.mem.eql(u8, dir, "/")) {
+                try runChmod(io, gpa, dir, 0o755);
+            }
+        }
+    }
+
+    const config_exists = existsAbsolute(io, options.config);
+    var generated_token: ?[]const u8 = null;
+    if (!config_exists or options.force) {
+        if (config_exists) {
+            std.log.warn("overwriting existing config (--force); the API key will rotate", .{});
+        }
+        const generated = try config.generate(arena, io);
+        try writeFile(io, options.config, generated.text, 0o600);
+        generated_token = generated.token;
+        std.log.info("created config: {s}", .{options.config});
+    } else {
+        std.log.info("keeping existing config: {s}", .{options.config});
+    }
+
+    // Make sure the service user can read the config, regardless of whether it
+    // was just created or already existed.
+    const owner = try std.fmt.allocPrint(arena, "{s}:", .{options.user});
+    const chown_argv = [_][]const u8{ "chown", owner, options.config };
+    try runChecked(io, gpa, &chown_argv);
+    try runChmod(io, gpa, options.config, 0o600);
+
+    // 4. systemd unit.
+    try writeFile(io, unit_path, unit, 0o644);
+    std.log.info("wrote systemd unit: {s}", .{unit_path});
+
+    // 5. Reload, enable, start.
+    try runChecked(io, gpa, &.{ "systemctl", "daemon-reload" });
+    try runChecked(io, gpa, &.{ "systemctl", "enable", unit_name });
+    if (options.no_start) {
+        std.log.info("service enabled; start it with: systemctl start {s}", .{unit_name});
+    } else {
+        try runChecked(io, gpa, &.{ "systemctl", "restart", unit_name });
+        std.log.info("service started: {s}", .{unit_name});
+    }
+
+    // 6. Summary.
+    std.log.info("binary: {s}", .{options.binary});
+    std.log.info("config: {s}", .{options.config});
+    if (generated_token) |token| {
+        std.log.info("API key: {s}", .{token});
+        std.log.info("set SHOUFA_REDIS_REST_URL=http://127.0.0.1:8079", .{});
+        std.log.info("set SHOUFA_REDIS_REST_TOKEN={s}", .{token});
+    } else {
+        std.log.info("API key unchanged (existing config was kept)", .{});
+    }
+    std.log.info("check status with: systemctl status {s}", .{unit_name});
+}
+
+fn buildUnit(arena: std.mem.Allocator, options: *const Options) ![]const u8 {
+    return std.fmt.allocPrint(arena,
+        \\# Managed by `shoufad service-install`. Re-run that command to update.
+        \\[Unit]
+        \\Description=Shoufa self-hosted Redis-compatible server
+        \\After=network-online.target
+        \\Wants=network-online.target
+        \\
+        \\[Service]
+        \\Type=simple
+        \\User={s}
+        \\ExecStart="{s}" --config "{s}"
+        \\Restart=always
+        \\RestartSec=2
+        \\LimitNOFILE=65536
+        \\NoNewPrivileges=true
+        \\PrivateTmp=true
+        \\ProtectHome=true
+        \\ProtectSystem=strict
+        \\RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+        \\
+        \\[Install]
+        \\WantedBy=multi-user.target
+        \\
+    , .{ options.user, options.binary, options.config });
+}
+
+fn printPlan(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    options: *const Options,
+    exe_path: []const u8,
+    unit_name: []const u8,
+    unit_path: []const u8,
+    unit: []const u8,
+) !void {
+    const config_action = if (existsAbsolute(io, options.config))
+        "keep existing config (API key unchanged)"
+    else
+        "create config with a new API key";
+    const start_command = if (options.no_start)
+        try std.fmt.allocPrint(arena, "systemctl enable {s}", .{unit_name})
+    else
+        try std.fmt.allocPrint(arena, "systemctl enable {s} && systemctl restart {s}", .{ unit_name, unit_name });
+
+    const plan = try std.fmt.allocPrint(arena,
+        \\Service install plan (dry run):
+        \\  current binary: {s}
+        \\  install binary: {s}
+        \\  config:         {s}
+        \\  config action:  {s}
+        \\  service user:   {s}
+        \\  systemd unit:   {s}
+        \\
+        \\Commands:
+        \\  systemctl daemon-reload
+        \\  {s}
+        \\
+        \\Unit file:
+        \\{s}
+        \\
+    , .{ exe_path, options.binary, options.config, config_action, options.user, unit_path, start_command, unit });
+    try std.Io.File.stdout().writeStreamingAll(io, plan);
+}
+
+fn parseOptions(args: []const []const u8) !Options {
+    var options: Options = .{};
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            options.help = true;
+        } else if (std.mem.eql(u8, arg, "--no-start")) {
+            options.no_start = true;
+        } else if (std.mem.eql(u8, arg, "--force")) {
+            options.force = true;
+        } else if (std.mem.eql(u8, arg, "--dry-run") or std.mem.eql(u8, arg, "-n")) {
+            options.dry_run = true;
+        } else if (std.mem.eql(u8, arg, "--binary") or std.mem.eql(u8, arg, "--bin")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.binary = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--binary=")) {
+            options.binary = arg["--binary=".len..];
+        } else if (std.mem.eql(u8, arg, "--config")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.config = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--config=")) {
+            options.config = arg["--config=".len..];
+        } else if (std.mem.eql(u8, arg, "--service") or std.mem.eql(u8, arg, "--name")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.service_name = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--service=")) {
+            options.service_name = arg["--service=".len..];
+        } else if (std.mem.eql(u8, arg, "--user")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.user = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--user=")) {
+            options.user = arg["--user=".len..];
+        } else {
+            std.log.err("unknown option: {s}", .{arg});
+            return error.UnknownOption;
+        }
+    }
+    return options;
+}
+
+fn validateOptions(options: *const Options) !void {
+    try validateAbsolutePath(options.binary, "--binary");
+    try validateAbsolutePath(options.config, "--config");
+
+    if (options.service_name.len == 0) return error.InvalidArgument;
+    for (options.service_name) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.')) {
+            std.log.err("invalid service name (use letters, digits, '-', '_', '.'): {s}", .{options.service_name});
+            return error.InvalidArgument;
+        }
+    }
+    if (options.user.len == 0 or std.mem.indexOfAny(u8, options.user, " \t\n:/") != null) {
+        std.log.err("invalid user name: {s}", .{options.user});
+        return error.InvalidArgument;
+    }
+}
+
+fn validateAbsolutePath(path: []const u8, label: []const u8) !void {
+    if (!std.fs.path.isAbsolute(path)) {
+        std.log.err("{s} must be an absolute path: {s}", .{ label, path });
+        return error.InvalidArgument;
+    }
+    for (path) |c| {
+        if (c == '"' or c == '\n' or c == '\r') {
+            std.log.err("{s} contains characters that cannot be quoted in a systemd unit", .{label});
+            return error.InvalidArgument;
+        }
+    }
+}
+
+fn existsAbsolute(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
+    return true;
+}
+
+fn writeFile(io: std.Io, path: []const u8, data: []const u8, mode: u32) !void {
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = data,
+        .flags = .{
+            .permissions = @fromBackingInt(@intCast(mode)),
+            .truncate = true,
+        },
+    });
+}
+
+fn runChmod(io: std.Io, gpa: std.mem.Allocator, path: []const u8, mode: u32) !void {
+    const mode_text = try std.fmt.allocPrint(gpa, "{o:0>4}", .{mode});
+    defer gpa.free(mode_text);
+    const argv = [_][]const u8{ "chmod", mode_text, path };
+    try runChecked(io, gpa, &argv);
+}
+
+fn userExists(io: std.Io, gpa: std.mem.Allocator, user: []const u8) bool {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "id", "-u", user },
+        .stdout_limit = .limited(4096),
+        .stderr_limit = .limited(4096),
+    }) catch return false;
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    return result.term.success();
+}
+
+fn runChecked(io: std.Io, gpa: std.mem.Allocator, argv: []const []const u8) !void {
+    const result = std.process.run(gpa, io, .{
+        .argv = argv,
+        .stdout_limit = .limited(64 * 1024),
+        .stderr_limit = .limited(64 * 1024),
+    }) catch |err| {
+        std.log.err("failed to run {s}: {t}", .{ argv[0], err });
+        return err;
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    if (!result.term.success()) {
+        const detail = std.mem.trim(u8, result.stderr, " \t\r\n");
+        if (detail.len > 0) {
+            std.log.err("{s} failed: {s}", .{ argv[0], detail });
+        } else {
+            std.log.err("{s} failed", .{argv[0]});
+        }
+        return error.CommandFailed;
+    }
+}
+
+fn isRoot() bool {
+    if (comptime builtin.os.tag == .linux) {
+        return std.os.linux.geteuid() == 0;
+    }
+    return false;
+}
+
+pub fn printUsage(io: std.Io) !void {
+    try std.Io.File.stdout().writeStreamingAll(io,
+        \\Usage:
+        \\  shoufad [--config PATH]
+        \\  shoufad service-install [options]
+        \\
+        \\Commands:
+        \\  (none)          Run the Redis-compatible server
+        \\  service-install Install/update the systemd service (Linux only)
+        \\
+        \\service-install options:
+        \\  --binary PATH   Install path (default /usr/local/bin/shoufad)
+        \\  --config PATH   Config path (default /etc/shoufad/config)
+        \\  --service NAME  systemd unit name (default shoufad)
+        \\  --user NAME     Service user (default shoufad)
+        \\  --no-start      Enable at boot but do not start/restart now
+        \\  --force         Overwrite an existing config (rotates the API key)
+        \\  --dry-run, -n   Print the planned install without changing the system
+        \\  -h, --help      Show this help
+        \\
+    );
+}

@@ -1,0 +1,24 @@
+# Shoufa self-hosted Redis REST server
+# Default location for a manual run: ~/.config/shoufad/config
+# systemd install location: /etc/shoufad/config
+# Permissions should be 0600 because this file contains API keys.
+
+bind = 127.0.0.1
+port = 8079
+
+# Hard maximum is 5 GiB. Bytes or human-readable sizes are accepted:
+#   max_memory = 5GB
+max_memory_bytes = 5368709120
+
+# Largest accepted HTTP request body (default 128 MiB).
+max_request_bytes = 134217728
+
+# How often expired keys are actively swept and their memory reclaimed.
+sweep_interval_ms = 1000
+
+# Multiple api_key lines are supported; rotate by adding a new one and
+# removing the old one.
+api_key = sfr_replace_me
+
+# Never expose an unauthenticated instance to the internet.
+allow_anonymous = false
