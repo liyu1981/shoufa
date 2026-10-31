@@ -1,6 +1,6 @@
 .{
     .name = .shoufa_redis,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .fingerprint = 0x235448349be9c49f,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{},
