@@ -40,7 +40,7 @@ pub fn load(init: std.process.Init) LoadError!Config {
     const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => blk: {
             const generated = try generate(arena);
-            try writeDefaultConfig(arena, io, path, generated);
+            try writeDefaultConfig(io, path, generated);
             break :blk generated;
         },
         else => return err,
@@ -124,8 +124,7 @@ pub fn generate(allocator: std.mem.Allocator) ![]const u8 {
     return out.toOwnedSlice();
 }
 
-fn writeDefaultConfig(arena: std.mem.Allocator, io: std.Io, path: []const u8, text: []const u8) !void {
-    _ = arena;
+fn writeDefaultConfig(io: std.Io, path: []const u8, text: []const u8) !void {
     if (std.fs.path.dirname(path)) |dir| {
         if (dir.len > 0) try std.Io.Dir.cwd().createDirPath(io, dir);
     }

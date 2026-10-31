@@ -30,9 +30,13 @@ export function humanSize(bytes: number): string {
 function decodeImage(file: File): Promise<{ img: HTMLImageElement; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const img = new Image()
+    const url = URL.createObjectURL(file)
     img.onload = () => resolve({ img, width: img.naturalWidth, height: img.naturalHeight })
-    img.onerror = () => reject(new Error("Failed to decode image"))
-    img.src = URL.createObjectURL(file)
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error("Failed to decode image"))
+    }
+    img.src = url
   })
 }
 

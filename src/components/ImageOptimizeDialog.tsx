@@ -36,6 +36,13 @@ export function ImageOptimizeDialog(props: ImageOptimizeDialogProps) {
   )
 }
 
+const OPTIONS = [
+  { id: "compress", label: "Compress (keep resolution)" },
+  { id: "resize75", label: "Resize to 75% + compress" },
+  { id: "resize50", label: "Resize to 50% + compress" },
+  { id: "resize33", label: "Resize to 33% + compress" },
+] as const
+
 /* ------------------------------------------------------------------ */
 /*  Inner component — owns all state, mounts fresh every time `open`  */
 /* ------------------------------------------------------------------ */
@@ -52,27 +59,23 @@ function ImageOptimizeDialogInner({
   const [error, setError] = useState<string | null>(null)
   const [sizes, setSizes] = useState<Record<string, number>>({})
 
-  const options = [
-    { id: "compress", label: "Compress (keep resolution)" },
-    { id: "resize75", label: "Resize to 75% + compress" },
-    { id: "resize50", label: "Resize to 50% + compress" },
-    { id: "resize33", label: "Resize to 33% + compress" },
-  ]
-
   // Compute estimates in background (fast, uses toDataURL)
   useEffect(() => {
     if (!file || !isOptimizable(file)) return
     let cancelled = false
-    estimateOptionSizes(file).then((result) => {
-      if (cancelled) return
-      setSizes(result)
-      // Auto-select first option under limit
-      const bestId = options.find((o) => result[o.id] != null && result[o.id] <= maxAllowedSize)?.id
-      if (bestId) setSelected(bestId)
-    })
+    estimateOptionSizes(file)
+      .then((result) => {
+        if (cancelled) return
+        setSizes(result)
+        // Auto-select first option under limit
+        const bestId = OPTIONS.find((o) => result[o.id] != null && result[o.id] <= maxAllowedSize)?.id
+        if (bestId) setSelected(bestId)
+      })
+      .catch(() => {
+        if (!cancelled) setError(t("optimize.failed"))
+      })
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxAllowedSize])
+  }, [file, maxAllowedSize, t])
 
   const handleConfirm = useCallback(async () => {
     if (!file || !selected) return
@@ -140,7 +143,7 @@ function ImageOptimizeDialogInner({
 
       {/* Options */}
       <div className="space-y-2">
-          {options.map((opt) => {
+          {OPTIONS.map((opt) => {
             const isSelected = selected === opt.id
             const estSize = sizes[opt.id]
             const isUnderLimit = estSize != null && estSize <= maxAllowedSize

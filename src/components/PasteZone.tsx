@@ -2,13 +2,12 @@ import { useCallback, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
 import { isOptimizable } from "@/lib/image-optimize"
-import { isImageFile } from "@/lib/file-type"
+import { getEffectiveMimeType, isImageFile } from "@/lib/file-type"
 import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon } from "lucide-react"
 import { AlertDialog } from "./AlertDialog"
 import { ImageOptimizeDialog } from "./ImageOptimizeDialog"
-import { getEffectiveMimeType } from "@/lib/file-type"
 
-/** Client-side upload limit (matches free-tier default). Server is authoritative. */
+/** Client-side image limit; the server enforces the same cap. */
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024
 
 interface PasteZoneProps {
@@ -53,7 +52,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const { t } = useTranslation()
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [lastAction, setLastAction] = useState<"text" | "image" | null>(null)
+  const [lastAction, setLastAction] = useState<"text" | "upload" | null>(null)
   const [isMobileDevice] = useState(isMobile)
   const [error, setError] = useState<string | null>(null)
   const [textInput, setTextInput] = useState("")
@@ -120,7 +119,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
       })
       const data = await res.json().catch(() => null)
       if (res.ok && data?.ok) {
-        setLastAction("image")
+        setLastAction("upload")
         setTimeout(() => setLastAction(null), 1500)
         onAssetAdded()
       } else {
@@ -278,7 +277,7 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
       <div className="flex items-center gap-3">
         {lastAction === "text" ? (
           <Check className="w-5 h-5 text-success shrink-0" />
-        ) : lastAction === "image" ? (
+        ) : lastAction === "upload" ? (
           <Check className="w-5 h-5 text-success shrink-0" />
         ) : uploading ? (
           <Upload className="w-5 h-5 text-muted-foreground animate-pulse shrink-0" />

@@ -18,7 +18,7 @@ export function getAssetSize(asset: {
   data?: string
   size?: number
 }): number {
-  if (asset.size) return asset.size
+  if (asset.size != null) return asset.size
   if (asset.type === "text" && asset.content) {
     return new TextEncoder().encode(asset.content).length
   }

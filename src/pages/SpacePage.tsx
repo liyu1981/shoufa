@@ -6,8 +6,8 @@ import { GlassCard } from "@/components/GlassCard"
 import { PasteZone } from "@/components/PasteZone"
 import { AssetCard } from "@/components/AssetCard"
 import { ThemeToggle } from "@/components/ThemeToggle"
-import { StorageProviderBadge } from "@/components/StorageProviderBadge"
-import type { Asset } from "@/lib/atoms"
+import { PoweredByBadge } from "@/components/PoweredByBadge"
+import type { Asset } from "@/lib/asset"
 import { addRecentSlug } from "@/lib/recent-slugs"
 import {
   Copy,
@@ -454,7 +454,7 @@ export default function SpacePage({ slug }: { slug: string }) {
               GitHub
             </a>
           </p>
-          <StorageProviderBadge className="text-xs text-muted-foreground/40" />
+          <PoweredByBadge className="text-xs text-muted-foreground/40" />
         </footer>
       </main>
     </div>

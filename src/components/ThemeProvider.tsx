@@ -21,8 +21,12 @@ const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 function readStoredTheme(): Theme {
   if (typeof window === "undefined") return "system"
-  const stored = window.localStorage.getItem("theme")
-  return stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
+  try {
+    const stored = window.localStorage.getItem("theme")
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
+  } catch {
+    return "system"
+  }
 }
 
 function resolveTheme(theme: Theme): ResolvedTheme {
@@ -51,7 +55,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme])
 
   const setTheme = useCallback((next: Theme) => {
-    window.localStorage.setItem("theme", next)
+    try {
+      window.localStorage.setItem("theme", next)
+    } catch {
+      // The class is still applied for this session.
+    }
     setThemeState(next)
   }, [])
 

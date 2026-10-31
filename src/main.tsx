@@ -8,7 +8,12 @@ import { router } from "@/router"
 import "@/styles.css"
 
 // Apply the persisted theme before React paints to avoid a flash.
-const storedTheme = localStorage.getItem("theme")
+let storedTheme: string | null = null
+try {
+  storedTheme = localStorage.getItem("theme")
+} catch {
+  // Storage may be unavailable in private/embedded browsers.
+}
 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
 const dark = storedTheme === "dark" || ((!storedTheme || storedTheme === "system") && prefersDark)
 document.documentElement.classList.toggle("dark", dark)

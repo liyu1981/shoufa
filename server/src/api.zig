@@ -30,11 +30,6 @@ pub fn handle(
     segments: []const []const u8,
     body: []const u8,
 ) !Response {
-    // /api/config
-    if (segments.len == 2 and eql(segments[1], "config") and method == .GET) {
-        return configResponse(arena);
-    }
-
     // /api/slugs
     if (segments.len == 2 and eql(segments[1], "slugs") and method == .POST) {
         return createSlug(store, arena, body);
@@ -81,16 +76,6 @@ pub fn handle(
     return errorResponse(arena, .not_found, "Not found");
 }
 
-fn configResponse(arena: std.mem.Allocator) !Response {
-    const body = try std.fmt.allocPrint(arena,
-        \\{{"ok":true,"data":{{
-        \\"storage":{{"kind":"self-hosted","displayName":"shoufad"}},
-        \\"limits":{{"maxTtl":{d},"maxImageSize":{d},"maxRequestSize":{d}}}
-        \\}}}}
-    , .{ MAX_TTL, MAX_IMAGE_BYTES, MAX_REQUEST_BYTES });
-    return .{ .status = .ok, .body = body };
-}
-
 fn createSlug(store: *Store, arena: std.mem.Allocator, body: []const u8) !Response {
     var requested: ?[]const u8 = null;
 
@@ -131,11 +116,10 @@ fn deleteSlug(store: *Store, arena: std.mem.Allocator, slug: []const u8) !Respon
     const slug_key = try std.fmt.allocPrint(arena, "slug:{s}", .{slug});
     const assets_key = try std.fmt.allocPrint(arena, "slug:{s}:assets", .{slug});
 
-    if (store.exists(&[_][]const u8{slug_key}) == 0) {
-        return errorResponse(arena, .not_found, "Space not found");
-    }
+    const deleted = store.del(&[_][]const u8{slug_key});
+    _ = store.del(&[_][]const u8{assets_key});
+    if (deleted == 0) return errorResponse(arena, .not_found, "Space not found");
 
-    _ = store.del(&[_][]const u8{ slug_key, assets_key });
     return .{ .status = .ok, .body = "{\"ok\":true}" };
 }
 
@@ -269,7 +253,7 @@ fn addAsset(store: *Store, arena: std.mem.Allocator, slug: []const u8, body: []c
         const file_name = jsonString(value, "fileName") orelse "";
         const size = jsonInt(value, "size") orelse 0;
         const estimated_size = decodedDataUrlSize(data);
-        if (size > MAX_IMAGE_BYTES or estimated_size > MAX_IMAGE_BYTES) {
+        if (size < 0 or size > MAX_IMAGE_BYTES or estimated_size > MAX_IMAGE_BYTES) {
             return errorResponse(arena, .payload_too_large, "File too large");
         }
 
@@ -378,7 +362,7 @@ fn generateSlug(store: *Store, arena: std.mem.Allocator, io: std.Io) ![]const u8
         const adjective = words.adjectives[randomIndex(io, words.adjectives.len)];
         const noun = words.nouns[randomIndex(io, words.nouns.len)];
         const candidate = try std.fmt.allocPrint(arena, "{s}-{s}", .{ adjective, noun });
-        if (!slugExists(store, candidate)) return candidate;
+        if (isValidSlug(candidate) and !slugExists(store, candidate)) return candidate;
     }
 
     const all_words = words.adjectives ++ words.nouns;
@@ -386,7 +370,7 @@ fn generateSlug(store: *Store, arena: std.mem.Allocator, io: std.Io) ![]const u8
     var number: usize = 1;
     while (number <= 999) : (number += 1) {
         const candidate = try std.fmt.allocPrint(arena, "{s}{d}", .{ base, number });
-        if (!slugExists(store, candidate)) return candidate;
+        if (isValidSlug(candidate) and !slugExists(store, candidate)) return candidate;
     }
 
     const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -483,7 +467,12 @@ fn jsonInt(value: std.json.Value, key: []const u8) ?i64 {
     return switch (value) {
         .object => |object| switch (object.get(key) orelse return null) {
             .integer => |integer| integer,
-            .float => |float| @intFromFloat(float),
+            .float => |float| if (std.math.isFinite(float) and
+                float >= @as(f64, @floatFromInt(std.math.minInt(i64))) and
+                float <= @as(f64, @floatFromInt(std.math.maxInt(i64))))
+                @intFromFloat(float)
+            else
+                null,
             else => null,
         },
         else => null,

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import AmbientBackground from "@/components/AmbientBackground"
 import { GlassCard } from "@/components/GlassCard"
 import { ThemeToggle } from "@/components/ThemeToggle"
-import { StorageProviderBadge } from "@/components/StorageProviderBadge"
+import { PoweredByBadge } from "@/components/PoweredByBadge"
 import { useRecentSlugs } from "@/hooks/use-recent-slugs"
 import { Zap, Link2, ArrowRight, Loader2, Clock, X } from "lucide-react"
 
@@ -45,7 +45,7 @@ export default function HomePage() {
         addSlug(slug)
         navigate({ to: "/s/$slug", params: { slug } })
       } else {
-        setError("Space not found. Create a new one?")
+        setError(data.error || "Space not found. Create a new one?")
       }
     } catch {
       setError("Failed to check space")
@@ -310,7 +310,7 @@ export default function HomePage() {
               GitHub
             </a>
           </p>
-          <StorageProviderBadge className="text-xs text-muted-foreground/40" />
+          <PoweredByBadge className="text-xs text-muted-foreground/40" />
         </footer>
 
         {/* How it works */}
