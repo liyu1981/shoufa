@@ -53,40 +53,61 @@ Use a different config file with `--config` or `SHOUFA_REDIS_CONFIG`:
 
 ## Install as a systemd service (Linux)
 
-The binary can install itself:
+The binary installs itself as either a system service or a per-user service.
+
+### System service (root)
 
 ```bash
 sudo ./zig-out/bin/shoufad service-install
 ```
 
-This command:
+This copies the binary to `/usr/local/bin/shoufad`, creates the `shoufad`
+service user, writes `/etc/shoufad/config`, and installs
+`/etc/systemd/system/shoufad.service`.
 
-1. Copies the running binary to `/usr/local/bin/shoufad`.
-2. Creates the `shoufad` system user (skip with `--user root` or an existing user).
-3. Creates `/etc/shoufad/config` with a random API key if it does not exist.
-4. Writes `/etc/systemd/system/shoufad.service`.
-5. Runs `systemctl daemon-reload`, enables the unit, and starts/restarts it.
+### User service (no root)
 
-Preview everything first without touching the system:
+```bash
+./zig-out/bin/shoufad service-install
+```
+
+When run as a normal user this installs a systemd **user** service:
+
+- Binary: `~/.local/bin/shoufad`
+- Config: `~/.config/shoufad/config`
+- Unit: `~/.config/systemd/user/shoufad.service`
+- Commands: `systemctl --user ...`
+
+User services start at login by default. The installer attempts
+`loginctl enable-linger <user>` so the service also starts at boot; if that
+needs elevated permissions it prints the `sudo loginctl enable-linger ...`
+command to run.
+
+Preview either mode first:
 
 ```bash
 ./zig-out/bin/shoufad service-install --dry-run
+./zig-out/bin/shoufad service-install --scope system --dry-run
 ```
 
 Useful options:
 
 ```text
---binary PATH    Install path (default /usr/local/bin/shoufad)
---config PATH    Config path (default /etc/shoufad/config)
---service NAME   systemd unit name (default shoufad)
---user NAME      service user (default shoufad)
---no-start       Enable at boot but do not start/restart now
---force          Overwrite the config and rotate the API key
---dry-run, -n    Print the plan and generated unit file only
+--scope system|user  default: system for root, user otherwise
+--binary PATH        default /usr/local/bin/shoufad (system)
+                     or ~/.local/bin/shoufad (user)
+--config PATH        default /etc/shoufad/config (system)
+                     or ~/.config/shoufad/config (user)
+--service NAME       systemd unit name (default shoufad)
+--user NAME          service user for --scope system (default shoufad)
+--no-start           Enable at boot but do not start/restart now
+--force              Overwrite the config and rotate the API key
+--dry-run, -n        Print the plan and generated unit file only
 ```
 
-Re-running `sudo shoufad service-install` updates the binary and unit while
-keeping the existing config/API key. Run `systemctl status shoufad` to check it.
+Re-running the install updates the binary and unit while keeping the existing
+config/API key. Check status with `systemctl status shoufad` for a system
+service or `systemctl --user status shoufad` for a user service.
 
 ## Configuration
 
@@ -179,8 +200,9 @@ and large allocations are returned to the OS.
 ## Deployment notes
 
 - Run **one instance**. There is no replication or shared state.
-- Prefer `sudo shoufad service-install` over hand-writing a unit. The generated
-  unit runs as a dedicated user and enables basic systemd hardening.
+- Prefer `shoufad service-install` over hand-writing a unit. Run it with
+  `sudo` for a system-wide service, or without `sudo` for a user service. The
+  generated units include basic systemd hardening.
 - Keep `bind = 127.0.0.1` and put a TLS-terminating reverse proxy (Caddy, nginx)
   in front if the app is on another machine.
 - Use a strong generated API key and keep the config file at `0600`.

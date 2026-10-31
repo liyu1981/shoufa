@@ -1,26 +1,38 @@
-//! `shoufad service-install` — install/update the systemd unit on Linux.
+//! `shoufad service-install` — install/update a systemd unit on Linux.
 //!
-//! The command is intentionally self-contained: it copies the running binary,
-//! creates a service user and config, writes the unit, then enables/starts it.
+//! Runs as a system service when executed as root, and as a per-user service
+//! otherwise. Both modes copy the running binary, provision a config with a
+//! generated API key, write the unit, and enable/start it.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const config = @import("config.zig");
 
-const DEFAULT_BINARY = "/usr/local/bin/shoufad";
-const DEFAULT_CONFIG = "/etc/shoufad/config";
-const DEFAULT_SERVICE = "shoufad";
-const DEFAULT_USER = "shoufad";
+const Scope = enum { system, user };
 
-const Options = struct {
-    binary: []const u8 = DEFAULT_BINARY,
-    config: []const u8 = DEFAULT_CONFIG,
-    service_name: []const u8 = DEFAULT_SERVICE,
-    user: []const u8 = DEFAULT_USER,
+const RawOptions = struct {
+    scope: ?Scope = null,
+    binary: ?[]const u8 = null,
+    config: ?[]const u8 = null,
+    service_name: ?[]const u8 = null,
+    user: ?[]const u8 = null,
     no_start: bool = false,
     force: bool = false,
     dry_run: bool = false,
     help: bool = false,
+};
+
+const Options = struct {
+    scope: Scope,
+    binary: []const u8,
+    config: []const u8,
+    unit_dir: []const u8,
+    service_name: []const u8,
+    /// Service account for system scope; current user for user scope.
+    user: []const u8,
+    no_start: bool = false,
+    force: bool = false,
+    dry_run: bool = false,
 };
 
 pub fn install(init: std.process.Init, args: []const []const u8) !void {
@@ -28,8 +40,8 @@ pub fn install(init: std.process.Init, args: []const []const u8) !void {
     const io = init.io;
     const gpa = init.gpa;
 
-    const options = try parseOptions(args);
-    if (options.help) {
+    const raw = try parseOptions(args);
+    if (raw.help) {
         try printUsage(io);
         return;
     }
@@ -38,10 +50,12 @@ pub fn install(init: std.process.Init, args: []const []const u8) !void {
         std.log.err("service-install is only supported on Linux", .{});
         return error.UnsupportedPlatform;
     }
+
+    const options = try resolveOptions(init, raw);
     try validateOptions(&options);
 
     const unit_name = try std.fmt.allocPrint(arena, "{s}.service", .{options.service_name});
-    const unit_path = try std.fmt.allocPrint(arena, "/etc/systemd/system/{s}", .{unit_name});
+    const unit_path = try std.fs.path.join(arena, &.{ options.unit_dir, unit_name });
     const unit = try buildUnit(arena, &options);
 
     if (options.dry_run) {
@@ -50,96 +64,47 @@ pub fn install(init: std.process.Init, args: []const []const u8) !void {
         return;
     }
 
-    if (!isRoot()) {
-        std.log.err("service-install must be run as root (try: sudo shoufad service-install)", .{});
+    if (options.scope == .system and !isRoot()) {
+        std.log.err("--scope system requires root (try: sudo shoufad service-install)", .{});
         return error.NotRoot;
     }
-    if (std.Io.Dir.accessAbsolute(io, "/run/systemd/system", .{})) |_| {} else |_| {
-        std.log.err("systemd does not appear to be running (missing /run/systemd/system)", .{});
-        return error.SystemdUnavailable;
-    }
 
-    // 1. Service user. root needs no creation.
-    if (!std.mem.eql(u8, options.user, "root")) {
-        if (!userExists(io, gpa, options.user)) {
-            std.log.info("creating system user: {s}", .{options.user});
-            const argv = [_][]const u8{
-                "useradd",
-                "--system",
-                "--user-group",
-                "--no-create-home",
-                "--home-dir",
-                "/nonexistent",
-                "--shell",
-                "/usr/sbin/nologin",
-                options.user,
-            };
-            try runChecked(io, gpa, &argv);
-        }
-    }
+    try ensureSystemd(io);
 
-    // 2. Install the binary.
-    const exe_path = try std.process.executablePathAlloc(io, arena);
-    if (!std.mem.eql(u8, exe_path, options.binary)) {
-        if (std.fs.path.dirname(options.binary)) |dir| {
-            try std.Io.Dir.cwd().createDirPath(io, dir);
+    if (options.scope == .user) {
+        if (init.environ_map.get("XDG_RUNTIME_DIR") == null) {
+            std.log.err("XDG_RUNTIME_DIR is not set; a systemd user manager is not available", .{});
+            return error.UserSystemdUnavailable;
         }
-        std.log.info("installing binary: {s} -> {s}", .{ exe_path, options.binary });
-        try std.Io.Dir.copyFileAbsolute(exe_path, options.binary, io, .{
-            .permissions = @fromBackingInt(@intCast(0o755)),
-            .replace = true,
-        });
-    }
-
-    // 3. Config. Keep an existing file unless --force is used.
-    if (std.fs.path.dirname(options.config)) |dir| {
-        if (dir.len > 0) {
-            const dir_existed = existsAbsolute(io, dir);
-            try std.Io.Dir.cwd().createDirPath(io, dir);
-            // Only relax permissions on a directory we just created. Never
-            // chmod pre-existing system directories such as /etc.
-            if (!dir_existed and !std.mem.eql(u8, dir, "/")) {
-                try runChmod(io, gpa, dir, 0o755);
-            }
-        }
-    }
-
-    const config_exists = existsAbsolute(io, options.config);
-    var generated_token: ?[]const u8 = null;
-    if (!config_exists or options.force) {
-        if (config_exists) {
-            std.log.warn("overwriting existing config (--force); the API key will rotate", .{});
-        }
-        const generated = try config.generate(arena, io);
-        try writeFile(io, options.config, generated.text, 0o600);
-        generated_token = generated.token;
-        std.log.info("created config: {s}", .{options.config});
     } else {
-        std.log.info("keeping existing config: {s}", .{options.config});
+        try ensureSystemUser(io, gpa, &options);
     }
 
-    // Make sure the service user can read the config, regardless of whether it
-    // was just created or already existed.
-    const owner = try std.fmt.allocPrint(arena, "{s}:", .{options.user});
-    const chown_argv = [_][]const u8{ "chown", owner, options.config };
-    try runChecked(io, gpa, &chown_argv);
-    try runChmod(io, gpa, options.config, 0o600);
+    const exe_path = try std.process.executablePathAlloc(io, arena);
+    try installBinary(io, &options, exe_path);
+    const generated_token = try installConfig(io, gpa, arena, &options);
 
-    // 4. systemd unit.
     try writeFile(io, unit_path, unit, 0o644);
     std.log.info("wrote systemd unit: {s}", .{unit_path});
 
-    // 5. Reload, enable, start.
-    try runChecked(io, gpa, &.{ "systemctl", "daemon-reload" });
-    try runChecked(io, gpa, &.{ "systemctl", "enable", unit_name });
+    try runSystemctl(io, gpa, options.scope, "daemon-reload", null);
+    try runSystemctl(io, gpa, options.scope, "enable", unit_name);
     if (options.no_start) {
-        std.log.info("service enabled; start it with: systemctl start {s}", .{unit_name});
+        const start_hint = try std.fmt.allocPrint(arena, "{s} start {s}", .{
+            systemctlPrefix(options.scope), unit_name,
+        });
+        std.log.info("service enabled; start it with: {s}", .{start_hint});
     } else {
-        try runChecked(io, gpa, &.{ "systemctl", "restart", unit_name });
+        try runSystemctl(io, gpa, options.scope, "restart", unit_name);
         std.log.info("service started: {s}", .{unit_name});
     }
 
-    // 6. Summary.
+    if (options.scope == .user) {
+        enableLinger(io, gpa, options.user);
+    }
+
+    // Summary.
+    std.log.info("scope: {s}", .{scopeLabel(options.scope)});
     std.log.info("binary: {s}", .{options.binary});
     std.log.info("config: {s}", .{options.config});
     if (generated_token) |token| {
@@ -149,76 +114,78 @@ pub fn install(init: std.process.Init, args: []const []const u8) !void {
     } else {
         std.log.info("API key unchanged (existing config was kept)", .{});
     }
-    std.log.info("check status with: systemctl status {s}", .{unit_name});
+    const status_hint = try std.fmt.allocPrint(arena, "{s} status {s}", .{
+        systemctlPrefix(options.scope), unit_name,
+    });
+    std.log.info("check status with: {s}", .{status_hint});
 }
 
-fn buildUnit(arena: std.mem.Allocator, options: *const Options) ![]const u8 {
-    return std.fmt.allocPrint(arena,
-        \\# Managed by `shoufad service-install`. Re-run that command to update.
-        \\[Unit]
-        \\Description=Shoufa self-hosted Redis-compatible server
-        \\After=network-online.target
-        \\Wants=network-online.target
-        \\
-        \\[Service]
-        \\Type=simple
-        \\User={s}
-        \\ExecStart="{s}" --config "{s}"
-        \\Restart=always
-        \\RestartSec=2
-        \\LimitNOFILE=65536
-        \\NoNewPrivileges=true
-        \\PrivateTmp=true
-        \\ProtectHome=true
-        \\ProtectSystem=strict
-        \\RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-        \\
-        \\[Install]
-        \\WantedBy=multi-user.target
-        \\
-    , .{ options.user, options.binary, options.config });
+fn resolveOptions(init: std.process.Init, raw: RawOptions) !Options {
+    const arena = init.arena.allocator();
+    const scope: Scope = raw.scope orelse if (isRoot()) Scope.system else Scope.user;
+
+    var options: Options = .{
+        .scope = scope,
+        .binary = undefined,
+        .config = undefined,
+        .unit_dir = undefined,
+        .service_name = raw.service_name orelse "shoufad",
+        .user = undefined,
+        .no_start = raw.no_start,
+        .force = raw.force,
+        .dry_run = raw.dry_run,
+    };
+
+    switch (scope) {
+        .system => {
+            options.binary = raw.binary orelse "/usr/local/bin/shoufad";
+            options.config = raw.config orelse "/etc/shoufad/config";
+            options.unit_dir = "/etc/systemd/system";
+            options.user = raw.user orelse "shoufad";
+        },
+        .user => {
+            if (raw.user != null) {
+                std.log.err("--user NAME is only valid with --scope system", .{});
+                return error.InvalidArgument;
+            }
+            const home = init.environ_map.get("HOME") orelse {
+                std.log.err("HOME is not set; cannot determine user install paths", .{});
+                return error.HomeNotSet;
+            };
+            const config_home = init.environ_map.get("XDG_CONFIG_HOME") orelse
+                try std.fs.path.join(arena, &.{ home, ".config" });
+
+            options.binary = raw.binary orelse
+                try std.fs.path.join(arena, &.{ home, ".local", "bin", "shoufad" });
+            options.config = raw.config orelse
+                try std.fs.path.join(arena, &.{ config_home, "shoufad", "config" });
+            options.unit_dir = try std.fs.path.join(arena, &.{ config_home, "systemd", "user" });
+            options.user = try currentUserName(init, arena);
+        },
+    }
+
+    return options;
 }
 
-fn printPlan(
-    io: std.Io,
-    arena: std.mem.Allocator,
-    options: *const Options,
-    exe_path: []const u8,
-    unit_name: []const u8,
-    unit_path: []const u8,
-    unit: []const u8,
-) !void {
-    const config_action = if (existsAbsolute(io, options.config))
-        "keep existing config (API key unchanged)"
-    else
-        "create config with a new API key";
-    const start_command = if (options.no_start)
-        try std.fmt.allocPrint(arena, "systemctl enable {s}", .{unit_name})
-    else
-        try std.fmt.allocPrint(arena, "systemctl enable {s} && systemctl restart {s}", .{ unit_name, unit_name });
+fn currentUserName(init: std.process.Init, arena: std.mem.Allocator) ![]const u8 {
+    if (init.environ_map.get("USER")) |user| {
+        if (user.len > 0) return try arena.dupe(u8, user);
+    }
 
-    const plan = try std.fmt.allocPrint(arena,
-        \\Service install plan (dry run):
-        \\  current binary: {s}
-        \\  install binary: {s}
-        \\  config:         {s}
-        \\  config action:  {s}
-        \\  service user:   {s}
-        \\  systemd unit:   {s}
-        \\
-        \\Commands:
-        \\  systemctl daemon-reload
-        \\  {s}
-        \\
-        \\Unit file:
-        \\{s}
-        \\
-    , .{ exe_path, options.binary, options.config, config_action, options.user, unit_path, start_command, unit });
-    try std.Io.File.stdout().writeStreamingAll(io, plan);
+    const result = std.process.run(init.gpa, init.io, .{
+        .argv = &.{ "id", "-un" },
+        .stdout_limit = .limited(4096),
+        .stderr_limit = .limited(4096),
+    }) catch return error.UserNameUnknown;
+    defer init.gpa.free(result.stdout);
+    defer init.gpa.free(result.stderr);
+    if (!result.term.success()) return error.UserNameUnknown;
+
+    return try arena.dupe(u8, std.mem.trim(u8, result.stdout, " \t\r\n"));
 }
 
-fn parseOptions(args: []const []const u8) !Options {
-    var options: Options = .{};
+fn parseOptions(args: []const []const u8) !RawOptions {
+    var options: RawOptions = .{};
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -230,6 +197,12 @@ fn parseOptions(args: []const []const u8) !Options {
             options.force = true;
         } else if (std.mem.eql(u8, arg, "--dry-run") or std.mem.eql(u8, arg, "-n")) {
             options.dry_run = true;
+        } else if (std.mem.eql(u8, arg, "--scope")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.scope = try parseScope(args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--scope=")) {
+            options.scope = try parseScope(arg["--scope=".len..]);
         } else if (std.mem.eql(u8, arg, "--binary") or std.mem.eql(u8, arg, "--bin")) {
             i += 1;
             if (i >= args.len) return error.MissingValue;
@@ -262,9 +235,17 @@ fn parseOptions(args: []const []const u8) !Options {
     return options;
 }
 
+fn parseScope(value: []const u8) !Scope {
+    if (std.mem.eql(u8, value, "system")) return .system;
+    if (std.mem.eql(u8, value, "user")) return .user;
+    std.log.err("invalid --scope value (use 'system' or 'user'): {s}", .{value});
+    return error.InvalidArgument;
+}
+
 fn validateOptions(options: *const Options) !void {
     try validateAbsolutePath(options.binary, "--binary");
     try validateAbsolutePath(options.config, "--config");
+    try validateAbsolutePath(options.unit_dir, "--unit-dir");
 
     if (options.service_name.len == 0) return error.InvalidArgument;
     for (options.service_name) |c| {
@@ -273,9 +254,12 @@ fn validateOptions(options: *const Options) !void {
             return error.InvalidArgument;
         }
     }
-    if (options.user.len == 0 or std.mem.indexOfAny(u8, options.user, " \t\n:/") != null) {
-        std.log.err("invalid user name: {s}", .{options.user});
-        return error.InvalidArgument;
+
+    if (options.scope == .system) {
+        if (options.user.len == 0 or std.mem.indexOfAny(u8, options.user, " \t\n:/") != null) {
+            std.log.err("invalid user name: {s}", .{options.user});
+            return error.InvalidArgument;
+        }
     }
 }
 
@@ -292,9 +276,192 @@ fn validateAbsolutePath(path: []const u8, label: []const u8) !void {
     }
 }
 
-fn existsAbsolute(io: std.Io, path: []const u8) bool {
-    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
-    return true;
+fn ensureSystemd(io: std.Io) !void {
+    std.Io.Dir.accessAbsolute(io, "/run/systemd/system", .{}) catch {
+        std.log.err("systemd does not appear to be running (missing /run/systemd/system)", .{});
+        return error.SystemdUnavailable;
+    };
+}
+
+fn ensureSystemUser(io: std.Io, gpa: std.mem.Allocator, options: *const Options) !void {
+    if (std.mem.eql(u8, options.user, "root")) return;
+    if (userExists(io, gpa, options.user)) return;
+
+    std.log.info("creating system user: {s}", .{options.user});
+    const argv = [_][]const u8{
+        "useradd",
+        "--system",
+        "--user-group",
+        "--no-create-home",
+        "--home-dir",
+        "/nonexistent",
+        "--shell",
+        "/usr/sbin/nologin",
+        options.user,
+    };
+    try runChecked(io, gpa, &argv);
+}
+
+fn installBinary(io: std.Io, options: *const Options, exe_path: []const u8) !void {
+    if (std.mem.eql(u8, exe_path, options.binary)) return;
+
+    if (std.fs.path.dirname(options.binary)) |dir| {
+        try std.Io.Dir.cwd().createDirPath(io, dir);
+    }
+    std.log.info("installing binary: {s} -> {s}", .{ exe_path, options.binary });
+    try std.Io.Dir.copyFileAbsolute(exe_path, options.binary, io, .{
+        .permissions = @fromBackingInt(@intCast(0o755)),
+        .replace = true,
+    });
+}
+
+fn installConfig(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    options: *const Options,
+) !?[]const u8 {
+    if (std.fs.path.dirname(options.config)) |dir| {
+        if (dir.len > 0) {
+            const dir_existed = existsAbsolute(io, dir);
+            try std.Io.Dir.cwd().createDirPath(io, dir);
+            // Only relax permissions on a directory we just created. Never
+            // chmod pre-existing system directories such as /etc.
+            if (options.scope == .system and !dir_existed and !std.mem.eql(u8, dir, "/")) {
+                try runChmod(io, gpa, dir, 0o755);
+            }
+        }
+    }
+
+    const config_exists = existsAbsolute(io, options.config);
+    var generated_token: ?[]const u8 = null;
+    if (!config_exists or options.force) {
+        if (config_exists) {
+            std.log.warn("overwriting existing config (--force); the API key will rotate", .{});
+        }
+        const generated = try config.generate(arena, io);
+        try writeFile(io, options.config, generated.text, 0o600);
+        generated_token = generated.token;
+        std.log.info("created config: {s}", .{options.config});
+    } else {
+        std.log.info("keeping existing config: {s}", .{options.config});
+    }
+
+    if (options.scope == .system) {
+        const owner = try std.fmt.allocPrint(arena, "{s}:", .{options.user});
+        const chown_argv = [_][]const u8{ "chown", owner, options.config };
+        try runChecked(io, gpa, &chown_argv);
+    }
+    try runChmod(io, gpa, options.config, 0o600);
+    return generated_token;
+}
+
+fn buildUnit(arena: std.mem.Allocator, options: *const Options) ![]const u8 {
+    return switch (options.scope) {
+        .system => std.fmt.allocPrint(arena,
+            \\# Managed by `shoufad service-install`. Re-run that command to update.
+            \\[Unit]
+            \\Description=Shoufa self-hosted Redis-compatible server
+            \\After=network-online.target
+            \\Wants=network-online.target
+            \\
+            \\[Service]
+            \\Type=simple
+            \\User={s}
+            \\ExecStart="{s}" --config "{s}"
+            \\Restart=always
+            \\RestartSec=2
+            \\LimitNOFILE=65536
+            \\NoNewPrivileges=true
+            \\PrivateTmp=true
+            \\ProtectHome=true
+            \\ProtectSystem=strict
+            \\RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+            \\
+            \\[Install]
+            \\WantedBy=multi-user.target
+            \\
+        , .{ options.user, options.binary, options.config }),
+        .user => std.fmt.allocPrint(arena,
+            \\# Managed by `shoufad service-install`. Re-run that command to update.
+            \\[Unit]
+            \\Description=Shoufa self-hosted Redis-compatible server (user)
+            \\After=network-online.target
+            \\Wants=network-online.target
+            \\
+            \\[Service]
+            \\Type=simple
+            \\ExecStart="{s}" --config "{s}"
+            \\Restart=always
+            \\RestartSec=2
+            \\LimitNOFILE=65536
+            \\NoNewPrivileges=true
+            \\PrivateTmp=true
+            \\RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+            \\
+            \\[Install]
+            \\WantedBy=default.target
+            \\
+        , .{ options.binary, options.config }),
+    };
+}
+
+fn printPlan(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    options: *const Options,
+    exe_path: []const u8,
+    unit_name: []const u8,
+    unit_path: []const u8,
+    unit: []const u8,
+) !void {
+    const config_action = if (existsAbsolute(io, options.config))
+        "keep existing config (API key unchanged)"
+    else
+        "create config with a new API key";
+    const prefix = if (options.scope == .user) "systemctl --user" else "systemctl";
+    const reload = try std.fmt.allocPrint(arena, "{s} daemon-reload", .{prefix});
+    const start_command = if (options.no_start)
+        try std.fmt.allocPrint(arena, "{s} enable {s}", .{ prefix, unit_name })
+    else
+        try std.fmt.allocPrint(arena, "{s} enable {s} && {s} restart {s}", .{ prefix, unit_name, prefix, unit_name });
+    const linger = if (options.scope == .user)
+        try std.fmt.allocPrint(arena, "loginctl enable-linger {s}", .{options.user})
+    else
+        "";
+
+    const plan = try std.fmt.allocPrint(arena,
+        \\Service install plan (dry run):
+        \\  scope:          {s}
+        \\  current binary: {s}
+        \\  install binary: {s}
+        \\  config:         {s}
+        \\  config action:  {s}
+        \\  service user:   {s}
+        \\  systemd unit:   {s}
+        \\
+        \\Commands:
+        \\  {s}
+        \\  {s}
+        \\  {s}
+        \\
+        \\Unit file:
+        \\{s}
+        \\
+    , .{
+        scopeLabel(options.scope),
+        exe_path,
+        options.binary,
+        options.config,
+        config_action,
+        options.user,
+        unit_path,
+        reload,
+        start_command,
+        linger,
+        unit,
+    });
+    try std.Io.File.stdout().writeStreamingAll(io, plan);
 }
 
 fn writeFile(io: std.Io, path: []const u8, data: []const u8, mode: u32) !void {
@@ -308,11 +475,47 @@ fn writeFile(io: std.Io, path: []const u8, data: []const u8, mode: u32) !void {
     });
 }
 
+fn existsAbsolute(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
+    return true;
+}
+
 fn runChmod(io: std.Io, gpa: std.mem.Allocator, path: []const u8, mode: u32) !void {
     const mode_text = try std.fmt.allocPrint(gpa, "{o:0>4}", .{mode});
     defer gpa.free(mode_text);
     const argv = [_][]const u8{ "chmod", mode_text, path };
     try runChecked(io, gpa, &argv);
+}
+
+fn runSystemctl(io: std.Io, gpa: std.mem.Allocator, scope: Scope, action: []const u8, unit: ?[]const u8) !void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+
+    try argv.append(gpa, "systemctl");
+    if (scope == .user) try argv.append(gpa, "--user");
+    try argv.append(gpa, action);
+    if (unit) |value| try argv.append(gpa, value);
+    try runChecked(io, gpa, argv.items);
+}
+
+fn enableLinger(io: std.Io, gpa: std.mem.Allocator, user: []const u8) void {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "loginctl", "enable-linger", user },
+        .stdout_limit = .limited(4096),
+        .stderr_limit = .limited(4096),
+    }) catch |err| {
+        std.log.warn("could not enable linger for {s}: {t}", .{ user, err });
+        std.log.warn("run `sudo loginctl enable-linger {s}` to start the service at boot", .{user});
+        return;
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    if (!result.term.success()) {
+        std.log.warn("could not enable linger for {s}", .{user});
+        std.log.warn("run `sudo loginctl enable-linger {s}` to start the service at boot", .{user});
+        return;
+    }
+    std.log.info("linger enabled for {s}; user service will start at boot", .{user});
 }
 
 fn userExists(io: std.Io, gpa: std.mem.Allocator, user: []const u8) bool {
@@ -355,6 +558,17 @@ fn isRoot() bool {
     return false;
 }
 
+fn scopeLabel(scope: Scope) []const u8 {
+    return switch (scope) {
+        .system => "system",
+        .user => "user",
+    };
+}
+
+fn systemctlPrefix(scope: Scope) []const u8 {
+    return if (scope == .user) "systemctl --user" else "systemctl";
+}
+
 pub fn printUsage(io: std.Io) !void {
     try std.Io.File.stdout().writeStreamingAll(io,
         \\Usage:
@@ -366,10 +580,14 @@ pub fn printUsage(io: std.Io) !void {
         \\  service-install Install/update the systemd service (Linux only)
         \\
         \\service-install options:
-        \\  --binary PATH   Install path (default /usr/local/bin/shoufad)
-        \\  --config PATH   Config path (default /etc/shoufad/config)
+        \\  --scope MODE    'system' (root) or 'user' (non-root)
+        \\                  default: system for root, user otherwise
+        \\  --binary PATH   default /usr/local/bin/shoufad (system)
+        \\                  or ~/.local/bin/shoufad (user)
+        \\  --config PATH   default /etc/shoufad/config (system)
+        \\                  or ~/.config/shoufad/config (user)
         \\  --service NAME  systemd unit name (default shoufad)
-        \\  --user NAME     Service user (default shoufad)
+        \\  --user NAME     Service user for --scope system (default shoufad)
         \\  --no-start      Enable at boot but do not start/restart now
         \\  --force         Overwrite an existing config (rotates the API key)
         \\  --dry-run, -n   Print the planned install without changing the system

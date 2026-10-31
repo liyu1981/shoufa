@@ -50,28 +50,43 @@ pnpm dev
    ```bash
    server/zig-out/bin/shoufad service-install --dry-run
    ```
-3. Install it:
+3. Install it as a system service:
    ```bash
    sudo server/zig-out/bin/shoufad service-install
    ```
-   The command copies the binary to `/usr/local/bin/shoufad`, creates the
-   `shoufad` service user, writes `/etc/shoufad/config` with a generated API
-   key, installs `/etc/systemd/system/shoufad.service`, enables it, and starts
-   it.
+   This copies the binary to `/usr/local/bin/shoufad`, creates the `shoufad`
+   service user, writes `/etc/shoufad/config` with a generated API key,
+   installs `/etc/systemd/system/shoufad.service`, enables it, and starts it.
+
+   Or install it as a **user service** without root:
+   ```bash
+   server/zig-out/bin/shoufad service-install
+   ```
+   This uses `~/.local/bin/shoufad`, `~/.config/shoufad/config`, and
+   `~/.config/systemd/user/shoufad.service`. The installer attempts to enable
+   linger so it starts at boot; if that needs elevated permissions it prints
+   the `sudo loginctl enable-linger <user>` command to run.
 4. Put nginx/Caddy in front for TLS if the web app is off-host, then set
    `SHOUFA_REDIS_REST_URL` and `SHOUFA_REDIS_REST_TOKEN` in the web app's
    environment. The token is printed by `service-install` and stored at
-   `/etc/shoufad/config`.
+   `/etc/shoufad/config` (system) or `~/.config/shoufad/config` (user).
 5. Leave the Upstash variables set (or unset) as your fallback policy dictates.
    Self-hosted config always takes precedence when present.
 
-To update, rebuild and re-run `sudo shoufad service-install`. The existing
-config and API key are kept. Pass `--force` to rotate the key.
+To update, rebuild and re-run the same install command (`sudo` for system,
+without `sudo` for user). The existing config and API key are kept. Pass
+`--force` to rotate the key.
 
 Useful service commands:
 
 ```bash
+# system service
 systemctl status shoufad
 journalctl -u shoufad -f
 sudo systemctl restart shoufad
+
+# user service
+systemctl --user status shoufad
+journalctl --user -u shoufad -f
+systemctl --user restart shoufad
 ```

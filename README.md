@@ -77,12 +77,17 @@ beyond local development.
    ```
 2. Install it as a systemd service:
    ```bash
+   # system-wide service (root)
    sudo server/zig-out/bin/shoufad service-install
+
+   # or per-user service (no root)
+   server/zig-out/bin/shoufad service-install
    ```
-   This copies the binary to `/usr/local/bin/shoufad`, creates a `shoufad`
-   service user, writes `/etc/shoufad/config` with a generated API key, installs
-   `/etc/systemd/system/shoufad.service`, and starts it. Use `--dry-run` first to
-   preview the changes.
+   The system install uses `/usr/local/bin/shoufad`,
+   `/etc/shoufad/config`, and `shoufad.service`. The user install uses
+   `~/.local/bin/shoufad`, `~/.config/shoufad/config`, and
+   `~/.config/systemd/user/shoufad.service`. Use `--dry-run` first to preview
+   the changes.
 3. Re-run the same command after rebuilding to update the binary/service. The
    existing config and API key are kept unless you pass `--force`.
 4. Set these on your app host / Vercel project:
