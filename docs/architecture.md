@@ -45,3 +45,10 @@ When a room changes, the server increments its revision. The browser's
 - Unsafe API requests are checked against `Origin` / `Sec-Fetch-Site`.
 - CSP and related hardening headers are added by the Zig server.
 - Raw Redis protocol commands are not exposed.
+
+## Versioning
+
+The root `VERSION` file is injected into the Zig binary (`shoufad --version`,
+`/health`), the frontend bundle, and the HTML generator metadata. Release tags
+use the `vX.Y.Z` form; the release workflow refuses to publish if the tag does
+not match `VERSION`.

@@ -7,6 +7,7 @@ const store_mod = @import("store.zig");
 const api = @import("api.zig");
 const web = @import("web_assets.zig");
 const service = @import("service.zig");
+const version_info = @import("version.zig");
 
 const Store = store_mod.Store;
 const Config = config.Config;
@@ -25,7 +26,7 @@ const security_headers = [_]std.http.Header{
     .{ .name = "strict-transport-security", .value = "max-age=63072000; includeSubDomains" },
 };
 
-const health_body = "{\"ok\":true,\"service\":\"shoufad\"}";
+const health_body = "{\"ok\":true,\"service\":\"shoufad\",\"version\":\"" ++ version_info.version ++ "\"}";
 const internal_error_body = "{\"ok\":false,\"error\":\"Internal server error\"}";
 
 pub fn main(init: std.process.Init) !void {
@@ -45,7 +46,7 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
         if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "-V")) {
-            try std.Io.File.stdout().writeStreamingAll(init.io, "shoufad 0.2.0\n");
+            try std.Io.File.stdout().writeStreamingAll(init.io, "shoufad " ++ version_info.version ++ "\n");
             return;
         }
         if (!std.mem.startsWith(u8, command, "-")) {
@@ -75,7 +76,7 @@ fn runServer(init: std.process.Init) !void {
     const sweeper = try std.Thread.spawn(.{}, sweepLoop, .{&store});
     sweeper.detach();
 
-    std.log.info("shoufad listening on http://{s}:{d}", .{ cfg.bind, cfg.port });
+    std.log.info("shoufad {s} listening on http://{s}:{d}", .{ version_info.version, cfg.bind, cfg.port });
     std.log.info("config: {s}", .{cfg.path});
     std.log.info("max_memory={d} bytes, sweep_interval={d} ms", .{
         cfg.max_memory_bytes,

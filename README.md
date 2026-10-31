@@ -114,6 +114,32 @@ share one simple JSON contract. No multipart parser is needed.
   `Permissions-Policy`, COOP/CORP, and frame denial are set by the Zig server.
 - Raw Redis protocol commands are not exposed.
 
+## Versioning and releases
+
+The root [`VERSION`](./VERSION) file is the source of truth. It is injected into:
+
+- `shoufad --version`
+- `GET /health`
+- the frontend footer (`powered by shoufad · vX.Y.Z`)
+- the HTML `generator` metadata
+
+Set a new version with:
+
+```bash
+pnpm release:version 0.3.0
+git add VERSION package.json server/build.zig.zon
+git commit -m "chore: release v0.3.0"
+git tag v0.3.0
+git push origin main --tags
+```
+
+GitHub Actions:
+
+- `.github/workflows/ci.yml` runs lint, typecheck, build, and a server smoke test
+  on pushes to `main` and pull requests.
+- `.github/workflows/release.yml` runs on `v*` tags, verifies the tag matches
+  `VERSION`, and publishes x86_64/aarch64 Linux tarballs with checksums.
+
 ## Notes
 
 - Single node, non-persistent. Data is lost on restart.

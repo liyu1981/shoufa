@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build frontend and server
+        run: pnpm build
+
+      - name: Verify version
+        run: |
+          VERSION="$(cat VERSION)"
+          test "shoufad ${VERSION}" = "$(./server/zig-out/bin/shoufad --version)"
+
+      - name: Smoke test server
+        run: |
+          VERSION="$(cat VERSION)"
+          ./server/zig-out/bin/shoufad --bind 127.0.0.1 --config /tmp/shoufad-ci-config > /tmp/shoufad-ci.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:8079/health > /tmp/shoufad-health.json; then
+              break
+            fi
+            sleep 0.2
+          done
+
+          cat /tmp/shoufad-health.json
+          grep -q "\"version\":\"${VERSION}\"" /tmp/shoufad-health.json
+
+          curl -fsS -X POST -H 'content-type: application/json' -d '{}' \
+            http://127.0.0.1:8079/api/slugs > /tmp/shoufad-slug.json
+          SLUG="$(python3 -c 'import json; print(json.load(open("/tmp/shoufad-slug.json"))["data"]["slug"])')"
+
+          curl -fsS -X POST -H 'content-type: application/json' \
+            -d '{"content":"ci smoke","ttl":60}' \
+            "http://127.0.0.1:8079/api/${SLUG}/assets" > /tmp/shoufad-asset.json
+          grep -q '"content":"ci smoke"' /tmp/shoufad-asset.json
+          curl -fsS "http://127.0.0.1:8079/api/${SLUG}/assets" | grep -q 'ci smoke'
+          curl -fsS -X DELETE "http://127.0.0.1:8079/api/${SLUG}" > /dev/null

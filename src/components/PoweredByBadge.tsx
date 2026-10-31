@@ -5,7 +5,7 @@ export function PoweredByBadge({ className }: { className?: string }) {
 
   return (
     <p className={className}>
-      {t("app.poweredBy", { provider: "shoufad" })}
+      {t("app.poweredBy", { provider: "shoufad" })} · v{__APP_VERSION__}
     </p>
   )
 }

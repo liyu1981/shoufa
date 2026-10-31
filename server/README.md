@@ -3,6 +3,16 @@
 Self-hosted Shoufa server written in Zig. It serves the embedded Vite frontend
 and the same-origin JSON API from one process.
 
+## Version
+
+`VERSION` in the repository root is the source of truth. `shoufad --version`
+and `/health` expose it.
+
+```bash
+./zig-out/bin/shoufad --version
+curl http://127.0.0.1:8079/health
+```
+
 ## Build
 
 Requirements:

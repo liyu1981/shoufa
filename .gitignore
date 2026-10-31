@@ -44,3 +44,4 @@ yarn-error.log*
 
 # dev orchestrator lock
 /.shoufa-dev.lock
+/server/src/version.zig

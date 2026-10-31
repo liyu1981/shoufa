@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches VERSION
+        run: |
+          VERSION="$(cat VERSION)"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "${VERSION}" != "${TAG}" ]; then
+            echo "VERSION (${VERSION}) does not match tag (${GITHUB_REF_NAME})" >&2
+            exit 1
+          fi
+
+      - run: pnpm lint
+      - run: npx tsc --noEmit
+      - run: pnpm build
+
+      - name: Verify binary version
+        run: |
+          VERSION="$(cat VERSION)"
+          test "shoufad ${VERSION}" = "$(./server/zig-out/bin/shoufad --version)"
+
+      - name: Smoke test server
+        run: |
+          VERSION="$(cat VERSION)"
+          ./server/zig-out/bin/shoufad --bind 127.0.0.1 --config /tmp/shoufad-release-config > /tmp/shoufad-release.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:8079/health > /tmp/shoufad-release-health.json; then
+              break
+            fi
+            sleep 0.2
+          done
+          grep -q "\"version\":\"${VERSION}\"" /tmp/shoufad-release-health.json
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux-musl
+            arch: x86_64
+          - target: aarch64-linux-musl
+            arch: aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build:web
+
+      - name: Build shoufad (${{ matrix.target }})
+        run: |
+          cd server
+          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+
+      - name: Package release
+        run: |
+          VERSION="$(cat VERSION)"
+          NAME="shoufad-${VERSION}-linux-${{ matrix.arch }}"
+          mkdir -p "release/${NAME}"
+          cp server/zig-out/bin/shoufad "release/${NAME}/shoufad"
+          cp server/config.example "release/${NAME}/config.example"
+          cp server/README.md "release/${NAME}/README.md"
+          cp VERSION "release/${NAME}/VERSION"
+          tar -czf "release/${NAME}.tar.gz" -C "release/${NAME}" .
+          sha256sum "release/${NAME}.tar.gz" > "release/${NAME}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shoufad-linux-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: List release files
+        run: find release -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/*.tar.gz
+            release/*.sha256
