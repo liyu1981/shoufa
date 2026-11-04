@@ -8,6 +8,11 @@ import { PoweredByBadge } from "@/components/PoweredByBadge"
 import { useRecentSlugs } from "@/hooks/use-recent-slugs"
 import { Zap, Link2, ArrowRight, Loader2, Clock, X } from "lucide-react"
 
+/** Slugs are URL-safe: lowercase letters, digits and dashes only. */
+function normalizeSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9-]/g, "")
+}
+
 export default function HomePage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
@@ -19,6 +24,34 @@ export default function HomePage() {
   const [showDropdown, setShowDropdown] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Set while an IME (Chinese/Japanese/Korean...) composition is active.
+  const composingRef = useRef(false)
+
+  /**
+   * The input value is normalised as the user types, but that normalisation
+   * must be skipped while an IME (Chinese/Japanese/Korean...) composition is
+   * running: rewriting the value mid-composition desyncs the IME from the
+   * input and makes it re-insert its buffer, which the user sees as
+   * duplicated characters.
+   */
+  const handleSlugChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>, openRecent: boolean) => {
+      const raw = e.target.value
+      setCustomSlug(composingRef.current ? raw : normalizeSlug(raw))
+      setError(null)
+      if (openRecent) setShowDropdown(true)
+    },
+    [],
+  )
+
+  const handleCompositionStart = useCallback(() => {
+    composingRef.current = true
+  }, [])
+
+  const handleCompositionEnd = useCallback((e: React.CompositionEvent<HTMLInputElement>) => {
+    composingRef.current = false
+    setCustomSlug(normalizeSlug(e.currentTarget.value))
+  }, [])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -33,7 +66,7 @@ export default function HomePage() {
 
   // Join existing slug
   const handleJoin = useCallback(async (slugToJoin?: string) => {
-    const slug = (slugToJoin || customSlug).trim().toLowerCase()
+    const slug = normalizeSlug((slugToJoin || customSlug).trim())
     if (!slug) return
 
     setJoining(true)
@@ -80,7 +113,7 @@ export default function HomePage() {
 
   // Create custom slug
   const handleCreateCustom = useCallback(async () => {
-    const slug = customSlug.trim().toLowerCase()
+    const slug = normalizeSlug(customSlug.trim())
     if (!slug) return
 
     setCreating(true)
@@ -107,6 +140,8 @@ export default function HomePage() {
 
   // Handle Enter key
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Enter also confirms IME candidates; never treat those as submit.
+    if (e.nativeEvent.isComposing || composingRef.current) return
     if (e.key === "Enter") {
       e.preventDefault()
       if (customSlug.trim()) {
@@ -170,11 +205,9 @@ export default function HomePage() {
                   ref={inputRef}
                   type="text"
                   value={customSlug}
-                  onChange={(e) => {
-                    setCustomSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                    setError(null)
-                    setShowDropdown(true)
-                  }}
+                  onChange={(e) => handleSlugChange(e, true)}
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={handleCompositionEnd}
                   onFocus={() => setShowDropdown(true)}
                   onKeyDown={handleKeyDown}
                   placeholder={t("home.join.placeholder")}
@@ -248,11 +281,11 @@ export default function HomePage() {
               <input
                 type="text"
                 value={customSlug}
-                onChange={(e) => {
-                  setCustomSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                  setError(null)
-                }}
+                onChange={(e) => handleSlugChange(e, false)}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || composingRef.current) return
                   if (e.key === "Enter") {
                     e.preventDefault()
                     if (customSlug.trim()) {

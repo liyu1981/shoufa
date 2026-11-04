@@ -58,6 +58,9 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const [textInput, setTextInput] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Set while an IME (Chinese/Japanese/Korean...) composition is active. See
+  // syncTextFromDom for why the value is mirrored on composition events.
+  const composingRef = useRef(false)
   // Image optimization dialog state
   const [optimizeFile, setOptimizeFile] = useState<File | null>(null)
   const [optimizeOpen, setOptimizeOpen] = useState(false)
@@ -251,6 +254,18 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
     }
   }, [handleFile])
 
+  /**
+   * The textarea is controlled, so React rewrites its value on every render.
+   * During an IME composition the DOM value can run ahead of React state (the
+   * composition update lands before the input event), and a re-render in that
+   * gap — the room polls in the background — resets the field and makes the IME
+   * re-insert its buffer, producing duplicated characters. Mirroring the DOM
+   * value on every composition event keeps state and DOM in lockstep.
+   */
+  const syncTextFromDom = useCallback((e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    setTextInput(e.currentTarget.value)
+  }, [])
+
   const canSubmit = textInput.trim().length > 0
 
   return (
@@ -304,7 +319,18 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
           ref={textareaRef}
           value={textInput}
           onChange={(e) => setTextInput(e.target.value)}
+          onCompositionStart={(e) => {
+            composingRef.current = true
+            syncTextFromDom(e)
+          }}
+          onCompositionUpdate={syncTextFromDom}
+          onCompositionEnd={(e) => {
+            composingRef.current = false
+            syncTextFromDom(e)
+          }}
           onKeyDown={(e) => {
+            // Enter also confirms IME candidates; never treat those as submit.
+            if (e.nativeEvent.isComposing || composingRef.current) return
             // Submit on Cmd+Enter (Mac) or Ctrl+Enter (others)
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault()
