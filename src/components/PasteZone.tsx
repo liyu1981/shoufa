@@ -3,9 +3,10 @@ import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
 import { isOptimizable } from "@/lib/image-optimize"
 import { getEffectiveMimeType, isImageFile } from "@/lib/file-type"
-import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon } from "lucide-react"
+import { Clipboard, Upload, Check, Send, ImageIcon, File as FileIcon, Maximize2 } from "lucide-react"
 import { AlertDialog } from "./AlertDialog"
 import { ImageOptimizeDialog } from "./ImageOptimizeDialog"
+import { TextFocusMode } from "./TextFocusMode"
 
 /** Client-side image limit; the server enforces the same cap. */
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024
@@ -56,6 +57,8 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
   const [isMobileDevice] = useState(isMobile)
   const [error, setError] = useState<string | null>(null)
   const [textInput, setTextInput] = useState("")
+  // Expanded editor for the text that is about to be sent.
+  const [focusMode, setFocusMode] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Set while an IME (Chinese/Japanese/Korean...) composition is active. See
@@ -268,6 +271,19 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
 
   const canSubmit = textInput.trim().length > 0
 
+  const handleFocusSubmit = useCallback(async () => {
+    if (!textInput.trim()) return
+    // Leave focus mode right away; the compact view shows the progress and the
+    // text is only cleared once the server accepted it.
+    setFocusMode(false)
+    await handleTextSubmit(textInput)
+  }, [textInput, handleTextSubmit])
+
+  const closeFocusMode = useCallback(() => {
+    setFocusMode(false)
+    textareaRef.current?.focus()
+  }, [])
+
   return (
     <div
       onPaste={handlePaste}
@@ -331,10 +347,17 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
           onKeyDown={(e) => {
             // Enter also confirms IME candidates; never treat those as submit.
             if (e.nativeEvent.isComposing || composingRef.current) return
-            // Submit on Cmd+Enter (Mac) or Ctrl+Enter (others)
+            // Cmd+Enter (Mac) or Ctrl+Enter (others) submits from the compact view.
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault()
               if (canSubmit) handleTextSubmit(textInput)
+              return
+            }
+            // Plain Enter opens the focus editor; Shift+Enter keeps the newline
+            // and mobile keyboards keep their native Enter behaviour.
+            if (e.key === "Enter" && !e.shiftKey && !isMobileDevice) {
+              e.preventDefault()
+              setFocusMode(true)
             }
           }}
           placeholder={t("paste.placeholder")}
@@ -357,6 +380,17 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
           title={t("paste.submit")}
         >
           <Send className="w-4 h-4" />
+        </button>
+
+        <button
+          onClick={() => setFocusMode(true)}
+          className="px-3 rounded-xl bg-foreground/5 text-muted-foreground hover:bg-foreground/10
+                     hover:text-foreground active:scale-95 transition-all duration-150
+                     flex items-center justify-center"
+          title={t("paste.focusOpen")}
+          aria-label={t("paste.focusOpen")}
+        >
+          <Maximize2 className="w-4 h-4" />
         </button>
       </div>
 
@@ -394,6 +428,16 @@ export function PasteZone({ slug, onAssetAdded, ttl }: PasteZoneProps) {
           <span>{t("paste.uploadFile")}</span>
         </button>
       </div>
+
+      {/* Focus mode editor for the pending text */}
+      <TextFocusMode
+        open={focusMode}
+        value={textInput}
+        busy={uploading}
+        onChange={setTextInput}
+        onSubmit={handleFocusSubmit}
+        onClose={closeFocusMode}
+      />
 
       {/* Error dialog */}
       <AlertDialog

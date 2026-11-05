@@ -40,6 +40,11 @@
     "saved": "Text saved!",
     "uploaded": "Uploaded!",
     "uploading": "Uploading...",
+    "focusMode": "Focus mode",
+    "focusOpen": "Edit in focus mode (Enter)",
+    "focusDone": "Back to compact editor (Esc)",
+    "focusHint": "⌘/Ctrl + Enter to send · Esc to go back · Enter for a new line",
+    "focusChars": "{{count}} characters · edit freely, nothing is sent yet",
     "unsupportedImage": "This image format cannot be previewed. Convert it to JPEG/PNG/WebP, or use Upload file."
   },
   "theme": {

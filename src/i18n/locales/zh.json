@@ -41,6 +41,11 @@
     "saved": "文本已保存！",
     "uploaded": "已上传！",
     "uploading": "上传中...",
+    "focusMode": "专注编辑",
+    "focusOpen": "在专注编辑中编辑（Enter）",
+    "focusDone": "返回紧凑编辑（Esc）",
+    "focusHint": "⌘/Ctrl + Enter 发送 · Esc 返回 · Enter 换行",
+    "focusChars": "{{count}} 个字符 · 可自由编辑，尚未发送",
     "unsupportedImage": "此图片格式无法预览，请转换为 JPEG/PNG/WebP，或使用“上传文件”。"
   },
   "theme": {
