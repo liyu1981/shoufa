@@ -41,6 +41,9 @@ jobs:
       - name: Build frontend and server
         run: pnpm build
 
+      - name: Test server
+        run: cd server && zig build test
+
       - name: Verify version
         run: |
           VERSION="$(cat VERSION)"

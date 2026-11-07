@@ -28,6 +28,17 @@ pnpm build
 This runs `vite build`, writes the frontend to `server/src/web`, generates
 `server/src/web_assets.zig`, and compiles the binary.
 
+SQLite is vendored (`vendor/sqlite/sqlite3.c`) and compiled into the binary, so
+no system SQLite package is required and musl cross-builds stay self-contained.
+
+Unit tests cover the object format, the metadata index, and the LRU/disk
+fallback behaviour of the store:
+
+```bash
+cd server
+zig build test
+```
+
 Run manually:
 
 ```bash
@@ -45,6 +56,8 @@ override the config for a single run:
 ./zig-out/bin/shoufad --bind 0.0.0.0 --port 8079
 ```
 
+Use `--data PATH` to point a run at a different data directory.
+
 ## Config
 
 See [`config.example`](./config.example).
@@ -53,11 +66,40 @@ See [`config.example`](./config.example).
 | --- | --- | --- |
 | `bind` | `127.0.0.1` | Listen interface |
 | `port` | `8079` | Listen port |
-| `max_memory_bytes` | `5 GiB` | Store budget; values above 5 GiB are rejected |
+| `data_dir` | `~/.shoufa/data` | SQLite metadata index + sharded object store |
+| `max_memory_bytes` | `512 MiB` | In-memory LRU cache budget; values above 5 GiB are rejected |
 | `max_request_bytes` | `16 MiB` | Max JSON request body |
 | `sweep_interval_ms` | `1000` | Expired-key sweep interval |
 
 There are no API keys. The frontend and API are same-origin.
+
+`--data PATH` (or `SHOUFA_DATA` / `XDG_DATA_HOME`) overrides `data_dir` for a
+single run.
+
+## Storage
+
+Everything is written through to disk; memory only holds a bounded cache.
+
+```text
+<data_dir>/
+├── meta.sqlite3        # key, expiry, field count, object path (WAL mode)
+├── meta.sqlite3-wal
+├── meta.sqlite3-shm
+└── objects/ab/cd/<sha256>   # git-style two-level sharding
+```
+
+- **Write:** serialize the hash → atomically write the object file → upsert the
+  SQLite row → keep/insert the entry in the LRU cache.
+- **Read:** check the cache first; on a miss read the SQLite row, load the
+  object, verify its CRC, and re-admit it to the cache.
+- **Eviction:** when `max_memory_bytes` is exceeded the least recently used
+  entries leave memory. Their disk copy stays, so the next read reloads them.
+- **Expiry:** the sweeper removes expired keys from memory and from disk
+  (metadata row and object file).
+
+Because values live on disk, `max_memory_bytes` is a cache budget (hard cap
+5 GiB) rather than a total store limit. Existing configs that set 5 GiB keep
+working unchanged.
 
 ## systemd
 

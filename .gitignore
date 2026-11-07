@@ -38,6 +38,9 @@ yarn-error.log*
 /server/zig-out/
 /server/.zig-cache/
 
+# local server data (sqlite metadata + sharded objects)
+/.shoufa/
+
 # generated embedded frontend assets
 /server/src/web_assets.zig
 /server/src/web/

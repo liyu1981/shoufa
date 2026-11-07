@@ -364,6 +364,9 @@ fn buildUnit(arena: std.mem.Allocator, options: *const Options) ![]const u8 {
             \\Type=simple
             \\User={s}
             \\ExecStart="{s}" --config "{s}"
+            \\# ProtectHome/ProtectSystem block $HOME, so keep data in /var/lib.
+            \\StateDirectory=shoufa
+            \\Environment=SHOUFA_DATA=/var/lib/shoufa/data
             \\Restart=always
             \\RestartSec=2
             \\LimitNOFILE=65536
@@ -567,12 +570,18 @@ fn systemctlPrefix(scope: Scope) []const u8 {
 pub fn printUsage(io: std.Io) !void {
     try std.Io.File.stdout().writeStreamingAll(io,
         \\Usage:
-        \\  shoufad [--config PATH]
+        \\  shoufad [--config PATH] [--data PATH] [--bind ADDR] [--port N]
         \\  shoufad service-install [options]
         \\
         \\Commands:
         \\  (none)          Run the Shoufa server
         \\  service-install Install/update the systemd service (Linux only)
+        \\
+        \\Server options:
+        \\  --config PATH   Config file (default ~/.config/shoufad/config)
+        \\  --data PATH     Data directory (default ~/.shoufa/data)
+        \\  --bind ADDR     Listen interface
+        \\  --port N        Listen port
         \\
         \\service-install options:
         \\  --scope MODE    'system' (root) or 'user' (non-root)

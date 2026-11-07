@@ -44,6 +44,7 @@ jobs:
       - run: pnpm lint
       - run: npx tsc --noEmit
       - run: pnpm build
+      - run: cd server && zig build test
 
       - name: Verify binary version
         run: |

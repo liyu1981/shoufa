@@ -16,8 +16,8 @@ Browser
   ├─ GET /                 -> embedded index.html
   ├─ GET /assets/*         -> embedded Vite JS/CSS
   ├─ GET /s/<slug>         -> embedded index.html (SPA fallback)
-  ├─ GET /api/...          -> Zig JSON API -> in-memory store
-  ├─ POST/DELETE /api/...  -> Zig JSON API -> in-memory store
+  ├─ GET /api/...          -> Zig JSON API -> LRU cache / SQLite + objects
+  ├─ POST/DELETE /api/...  -> Zig JSON API -> LRU cache / SQLite + objects
   └─ GET /wait?slug=...    -> long-poll room revision
 ```
 
@@ -27,9 +27,29 @@ When a room changes, the server increments its revision. The browser's
 
 ## Storage
 
-- In-memory strings and hashes, capped at 5 GiB by default.
-- Per-key TTL, reclaimed lazily and by a background sweeper.
-- Single node, non-persistent by design.
+Every value is persisted, and memory only holds a bounded hot set.
+
+```text
+~/.shoufa/data/
+├── meta.sqlite3      # key, expires_at, field count, object path, updated_at
+└── objects/ab/cd/…   # SHA-256 sharded hash objects (two levels, like git)
+```
+
+- **Metadata** (key, expiry, field count, object size, object path) lives in
+  SQLite in WAL mode. An index on `expires_at` drives the expiry sweep.
+- **Values** are serialized length-prefixed binary blobs with a CRC-32
+  trailer, written atomically through a temporary file + rename.
+- **Memory** is an LRU cache sized by `max_memory_bytes` (default 512 MiB,
+  hard cap 5 GiB). Writes go to disk first and update the cache; reads check
+  the cache and fall back to disk, re-admitting the value when there is room.
+  Exceeding the budget evicts the least recently used entries from memory
+  only.
+- **Expiry** is enforced lazily on access and by a background sweeper that
+  removes both the metadata row and the object file.
+- **Revisions** for `/wait` stay process-local; after a restart clients
+  observe one spurious change and refresh.
+
+Storage is single-node. SQLite is vendored in `server/vendor/sqlite`.
 
 ## Frontend
 

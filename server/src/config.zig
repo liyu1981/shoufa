@@ -9,16 +9,22 @@
 const std = @import("std");
 
 pub const DEFAULT_PORT: u16 = 8079;
-pub const DEFAULT_MAX_MEMORY: usize = 5 * 1024 * 1024 * 1024; // 5 GiB
+/// In-memory cache budget for new installs. Existing configs that set a larger
+/// value keep working; `MAX_MEMORY_CAP` is the hard ceiling.
+pub const DEFAULT_MAX_MEMORY: usize = 512 * 1024 * 1024; // 512 MiB
 pub const DEFAULT_SWEEP_INTERVAL_MS: u64 = 1_000;
 pub const DEFAULT_MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_MEMORY_CAP: usize = 5 * 1024 * 1024 * 1024; // hard cap: 5 GiB
+pub const DEFAULT_DATA_DIR: []const u8 = "~/.shoufa/data";
 
 pub const Config = struct {
     /// Path of the config file that was loaded/created.
     path: []const u8,
     bind: []const u8 = "127.0.0.1",
     port: u16 = DEFAULT_PORT,
+    /// Durable storage root: SQLite metadata plus the sharded object store.
+    data_dir: []const u8 = "",
+    /// In-memory cache budget. Eviction is least-recently-used.
     max_memory_bytes: usize = DEFAULT_MAX_MEMORY,
     max_request_bytes: usize = DEFAULT_MAX_REQUEST_BYTES,
     sweep_interval_ms: u64 = DEFAULT_SWEEP_INTERVAL_MS,
@@ -48,7 +54,36 @@ pub fn load(init: std.process.Init) LoadError!Config {
 
     var cfg = try parse(arena, path, text);
     try applyCliOverrides(arena, init, &cfg);
+    if (cfg.data_dir.len == 0) cfg.data_dir = try defaultDataDir(arena, init);
+    cfg.data_dir = try expandHome(arena, init, cfg.data_dir);
     return cfg;
+}
+
+/// Expands a leading `~/` so config files may say `~/.shoufa/data`.
+fn expandHome(arena: std.mem.Allocator, init: std.process.Init, value: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, value, "~")) {
+        const home = init.environ_map.get("HOME") orelse return arena.dupe(u8, value);
+        return arena.dupe(u8, home);
+    }
+    if (std.mem.startsWith(u8, value, "~/")) {
+        const home = init.environ_map.get("HOME") orelse return arena.dupe(u8, value);
+        return std.fs.path.join(arena, &.{ home, value[2..] });
+    }
+    return arena.dupe(u8, value);
+}
+
+/// Defaults to ~/.shoufa/data, overridable with SHOUFA_DATA or XDG_DATA_HOME.
+fn defaultDataDir(arena: std.mem.Allocator, init: std.process.Init) ![]const u8 {
+    if (init.environ_map.get("SHOUFA_DATA")) |p| {
+        if (p.len > 0) return arena.dupe(u8, p);
+    }
+    if (init.environ_map.get("XDG_DATA_HOME")) |xdg| {
+        if (xdg.len > 0) return std.fs.path.join(arena, &.{ xdg, "shoufa", "data" });
+    }
+    if (init.environ_map.get("HOME")) |home| {
+        if (home.len > 0) return std.fs.path.join(arena, &.{ home, ".shoufa", "data" });
+    }
+    return arena.dupe(u8, ".shoufa/data");
 }
 
 fn applyCliOverrides(arena: std.mem.Allocator, init: std.process.Init, cfg: *Config) !void {
@@ -70,6 +105,14 @@ fn applyCliOverrides(arena: std.mem.Allocator, init: std.process.Init, cfg: *Con
             cfg.port = std.fmt.parseInt(u16, args[i], 10) catch return error.InvalidPort;
         } else if (std.mem.startsWith(u8, arg, "--port=")) {
             cfg.port = std.fmt.parseInt(u16, arg["--port=".len..], 10) catch return error.InvalidPort;
+        } else if (std.mem.eql(u8, arg, "--data")) {
+            i += 1;
+            if (i >= args.len or args[i].len == 0) return error.InvalidNumber;
+            cfg.data_dir = try arena.dupe(u8, args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--data=")) {
+            const value = arg["--data=".len..];
+            if (value.len == 0) return error.InvalidNumber;
+            cfg.data_dir = try arena.dupe(u8, value);
         }
     }
 }
@@ -111,12 +154,20 @@ pub fn generate(allocator: std.mem.Allocator) ![]const u8 {
         \\
         \\bind = 127.0.0.1
         \\port = {d}
+        \\
+        \\# Durable storage root: SQLite metadata plus the sharded object store.
+        \\# Left unset here so the default (or $SHOUFA_DATA / $XDG_DATA_HOME)
+        \\# applies. Uncomment to pin a location:
+        \\# data_dir = {s}
+        \\
+        \\# In-memory cache budget with LRU eviction. Every value is also on disk.
         \\max_memory_bytes = {d}
         \\max_request_bytes = {d}
         \\sweep_interval_ms = {d}
         \\
     , .{
         DEFAULT_PORT,
+        DEFAULT_DATA_DIR,
         DEFAULT_MAX_MEMORY,
         DEFAULT_MAX_REQUEST_BYTES,
         DEFAULT_SWEEP_INTERVAL_MS,
@@ -158,6 +209,9 @@ fn parse(arena: std.mem.Allocator, path: []const u8, text: []const u8) LoadError
             cfg.bind = try arena.dupe(u8, value);
         } else if (std.ascii.eqlIgnoreCase(key, "port")) {
             cfg.port = std.fmt.parseInt(u16, value, 10) catch return error.InvalidPort;
+        } else if (std.ascii.eqlIgnoreCase(key, "data_dir") or std.ascii.eqlIgnoreCase(key, "data")) {
+            if (value.len == 0) return error.InvalidNumber;
+            cfg.data_dir = try arena.dupe(u8, value);
         } else if (std.ascii.eqlIgnoreCase(key, "max_memory") or std.ascii.eqlIgnoreCase(key, "maxmemory")) {
             cfg.max_memory_bytes = parseSize(value) catch return error.InvalidNumber;
         } else if (std.ascii.eqlIgnoreCase(key, "max_memory_bytes")) {

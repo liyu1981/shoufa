@@ -5,12 +5,20 @@
 bind = 127.0.0.1
 port = 8079
 
-# Hard maximum is 5 GiB. Bytes or human-readable sizes are accepted:
-#   max_memory = 5GB
-max_memory_bytes = 5368709120
+# Durable storage root. Holds the SQLite metadata index and the sharded
+# object store. Defaults to ~/.shoufa/data (XDG_DATA_HOME/shoufa/data).
+# `~` is expanded; relative paths resolve against the working directory.
+data_dir = ~/.shoufa/data
+
+# In-memory cache budget in bytes. Everything is also persisted to disk, so
+# this only bounds how much is cached: the least recently used values are
+# evicted from memory and reloaded from disk on the next read.
+# Values above 5 GiB are rejected. Bytes or human-readable sizes are accepted:
+#   max_memory = 512MB
+max_memory_bytes = 536870912
 
 # Largest accepted JSON request body (file uploads are sent as data URLs).
 max_request_bytes = 16777216
 
-# How often expired keys are actively swept and their memory reclaimed.
+# How often expired keys are actively swept from memory and from disk.
 sweep_interval_ms = 1000

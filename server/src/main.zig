@@ -66,7 +66,10 @@ fn runServer(init: std.process.Init) !void {
     const instance_lock = try acquireInstanceLock(io, cfg.port);
     defer if (instance_lock) |file| file.close(io);
 
-    var store = Store.init(init.gpa, io, cfg.max_memory_bytes, cfg.sweep_interval_ms);
+    var store = Store.init(init.gpa, io, cfg.max_memory_bytes, cfg.sweep_interval_ms, cfg.data_dir) catch |err| {
+        std.log.err("failed to open data directory {s}: {t}", .{ cfg.data_dir, err });
+        return err;
+    };
     defer store.deinit();
 
     const address = try std.Io.net.IpAddress.parse(cfg.bind, cfg.port);
@@ -78,7 +81,8 @@ fn runServer(init: std.process.Init) !void {
 
     std.log.info("shoufad {s} listening on http://{s}:{d}", .{ version_info.version, cfg.bind, cfg.port });
     std.log.info("config: {s}", .{cfg.path});
-    std.log.info("max_memory={d} bytes, sweep_interval={d} ms", .{
+    std.log.info("data dir: {s}", .{cfg.data_dir});
+    std.log.info("memory cache={d} bytes (LRU), sweep_interval={d} ms", .{
         cfg.max_memory_bytes,
         cfg.sweep_interval_ms,
     });
@@ -135,7 +139,7 @@ fn acquireInstanceLock(io: std.Io, port: u16) !?std.Io.File {
 fn loadConfig(init: std.process.Init) !Config {
     return config.load(init) catch |err| switch (err) {
         error.MaxMemoryTooLarge => {
-            std.log.err("max_memory_bytes must be <= {d} (5 GiB)", .{config.MAX_MEMORY_CAP});
+            std.log.err("max_memory_bytes (memory cache budget) must be <= {d} (5 GiB)", .{config.MAX_MEMORY_CAP});
             return err;
         },
         else => return err,

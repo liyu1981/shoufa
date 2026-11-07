@@ -10,7 +10,8 @@ memorable link, and watch it auto-expire.
 - **Frontend:** Vite 8, React 19, TanStack Router, Tailwind CSS v4
 - **Backend:** Zig (`shoufad`) serving the API, change notifications, and the
   embedded frontend from one binary
-- **Storage:** in-memory strings/hashes with TTL cleanup, capped at 5 GiB
+- **Storage:** SQLite metadata index + git-style sharded objects on disk, with
+  a bounded in-memory LRU cache on top
 - **No Node.js runtime in production**, no Vercel, no Upstash/Layerbase
 
 The frontend build is embedded into the `shoufad` binary. One process serves
@@ -76,7 +77,8 @@ See [`server/config.example`](./server/config.example).
 ```ini
 bind = 127.0.0.1
 port = 8079
-max_memory_bytes = 5368709120
+data_dir = ~/.shoufa/data
+max_memory_bytes = 536870912
 max_request_bytes = 16777216
 sweep_interval_ms = 1000
 ```
@@ -90,6 +92,22 @@ Optional build-time canonical URL:
 ```bash
 VITE_SITE_URL=https://shoufa.example.com pnpm build
 ```
+
+## Storage
+
+Every value is persisted to disk under `data_dir` (default `~/.shoufa/data`):
+
+```text
+~/.shoufa/data/
+├── meta.sqlite3        # key, expiry, field count, object path
+└── objects/ab/cd/…     # git-style sharded hash objects (SHA-256 path)
+```
+
+`max_memory_bytes` only bounds the **in-memory cache**. Writes go to disk
+first and also land in the cache; reads check the cache and fall back to disk,
+loading the value back into memory when there is room. When the budget is
+exceeded the least recently used values are evicted from memory — nothing is
+dropped from disk.
 
 ## API
 
@@ -142,8 +160,10 @@ GitHub Actions:
 
 ## Notes
 
-- Single node, non-persistent. Data is lost on restart.
-- Defaults: 5 GiB store, 5 MiB image limit, 1 hour max TTL.
+- Single node. Data is persisted under `~/.shoufa/data` and survives restarts.
+- Defaults: 512 MiB memory cache (LRU), 5 MiB image limit, 1 hour max TTL.
+- Room revision counters (`/wait`) are process-local; a restart makes clients
+  refresh once.
 - See [`docs/architecture.md`](./docs/architecture.md) and
   [`server/README.md`](./server/README.md).
 

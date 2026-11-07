@@ -1,16 +1,19 @@
-//! Thread-safe in-memory hash store with Redis-like TTL semantics.
+//! Thread-safe hash store with Redis-like TTL semantics.
 //!
-//! The app only needs hashes plus key expiry. Keeping the store hash-only
-//! avoids dead string-command paths while retaining memory accounting, lazy
-//! expiry, background sweeping, and room revisions for long-poll clients.
+//! Values are always persisted: metadata lives in SQLite and the serialized
+//! hash is written to a git-style sharded object directory. A bounded LRU cache
+//! keeps the hottest keys in memory. Reads check the cache first and fall back
+//! to disk, loading the value back into the cache when there is room.
 
 const std = @import("std");
+const hash_mod = @import("hash.zig");
+const persist_mod = @import("persist.zig");
 
 pub const KEY_OVERHEAD: usize = 96;
-pub const FIELD_OVERHEAD: usize = 48;
-pub const VALUE_OVERHEAD: usize = 24;
+pub const FIELD_OVERHEAD: usize = hash_mod.FIELD_OVERHEAD;
+pub const VALUE_OVERHEAD: usize = hash_mod.VALUE_OVERHEAD;
 
-const Hash = std.StringHashMapUnmanaged([]u8);
+const Hash = hash_mod.Hash;
 
 pub const Field = struct {
     field: []const u8,
@@ -25,56 +28,75 @@ pub const HashCopy = struct {
     map: Hash = .empty,
 
     pub fn deinit(self: *HashCopy, gpa: std.mem.Allocator) void {
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            gpa.free(entry.key_ptr.*);
-            gpa.free(entry.value_ptr.*);
-        }
-        self.map.deinit(gpa);
+        hash_mod.deinit(gpa, self.map);
         self.* = .{};
     }
 };
 
-pub const Error = std.mem.Allocator.Error || error{MaxMemory};
+pub const Error = std.mem.Allocator.Error || error{ PersistFailed, CorruptObject };
 
 const Entry = struct {
+    key: []u8,
     value: Hash,
     expires_at_ms: ?i64 = null,
+    /// Bytes charged against the in-memory cache budget.
     bytes: usize,
+    field_count: u32,
+    prev: ?*Entry = null,
+    next: ?*Entry = null,
 };
 
 pub const Store = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     mutex: std.Io.Mutex = .init,
-    map: std.StringHashMapUnmanaged(Entry) = .empty,
-    /// Per-room revision counters used by the long-poll notification endpoint.
-    revisions: std.StringHashMapUnmanaged(u64) = .empty,
+
+    /// LRU cache. Values are heap-allocated so pointers remain stable across
+    /// hash-map rehashes; `head` is most-recently-used and `tail` is evicted
+    /// first.
+    map: std.StringHashMapUnmanaged(*Entry) = .empty,
+    head: ?*Entry = null,
+    tail: ?*Entry = null,
     used_bytes: usize = 0,
     max_bytes: usize,
+
     sweep_interval_ms: u64,
+    persist: persist_mod.Persist,
+
+    /// Per-room revision counters used by the long-poll notification endpoint.
+    revisions: std.StringHashMapUnmanaged(u64) = .empty,
 
     pub fn init(
         gpa: std.mem.Allocator,
         io: std.Io,
         max_bytes: usize,
         sweep_interval_ms: u64,
-    ) Store {
-        return .{
+        data_dir: []const u8,
+    ) !Store {
+        var persist = try persist_mod.Persist.init(gpa, io, data_dir);
+        errdefer persist.deinit();
+
+        var store: Store = .{
             .gpa = gpa,
             .io = io,
             .max_bytes = max_bytes,
             .sweep_interval_ms = sweep_interval_ms,
+            .persist = persist,
         };
+        store.sweepExpired();
+        return store;
     }
 
     pub fn deinit(self: *Store) void {
         self.lock();
-        self.flushLocked();
+        self.freeAllLocked();
         self.map.deinit(self.gpa);
+
         var revisions = self.revisions.iterator();
         while (revisions.next()) |entry| self.gpa.free(entry.key_ptr.*);
         self.revisions.deinit(self.gpa);
+
+        self.persist.deinit();
         self.unlock();
     }
 
@@ -99,7 +121,71 @@ pub const Store = struct {
     }
 
     // ============================================================
-    // Expiry / memory
+    // LRU cache
+    // ============================================================
+
+    fn linkFrontLocked(self: *Store, entry: *Entry) void {
+        entry.prev = null;
+        entry.next = self.head;
+        if (self.head) |head| head.prev = entry else self.tail = entry;
+        self.head = entry;
+    }
+
+    fn unlinkLocked(self: *Store, entry: *Entry) void {
+        if (entry.prev) |prev| prev.next = entry.next else self.head = entry.next;
+        if (entry.next) |next| next.prev = entry.prev else self.tail = entry.prev;
+        entry.prev = null;
+        entry.next = null;
+    }
+
+    fn touchLocked(self: *Store, entry: *Entry) void {
+        if (self.head == entry) return;
+        self.unlinkLocked(entry);
+        self.linkFrontLocked(entry);
+    }
+
+    fn freeEntry(self: *Store, entry: *Entry) void {
+        hash_mod.deinit(self.gpa, entry.value);
+        self.gpa.free(entry.key);
+        self.gpa.destroy(entry);
+    }
+
+    fn removeEntryLocked(self: *Store, entry: *Entry) void {
+        _ = self.map.remove(entry.key);
+        self.unlinkLocked(entry);
+        self.used_bytes -|= entry.bytes;
+        self.freeEntry(entry);
+    }
+
+    fn evictToBudgetLocked(self: *Store, protect: ?*Entry) void {
+        while (self.used_bytes > self.max_bytes) {
+            const victim = self.tail orelse break;
+            if (victim == protect) {
+                // Keep the entry alive for the current operation. If it is the
+                // only entry it may temporarily exceed the budget.
+                if (self.head == victim) break;
+                self.touchLocked(victim);
+                continue;
+            }
+            self.removeEntryLocked(victim);
+        }
+    }
+
+    fn freeAllLocked(self: *Store) void {
+        var current = self.head;
+        while (current) |entry| {
+            const next = entry.next;
+            self.freeEntry(entry);
+            current = next;
+        }
+        self.map.clearRetainingCapacity();
+        self.head = null;
+        self.tail = null;
+        self.used_bytes = 0;
+    }
+
+    // ============================================================
+    // Expiry / revisions
     // ============================================================
 
     fn isExpired(entry: *const Entry, now_ms: i64) bool {
@@ -162,116 +248,226 @@ pub const Store = struct {
         }
     }
 
-    fn removeKeyLocked(self: *Store, key: []const u8) bool {
-        const kv = self.map.fetchRemove(key) orelse return false;
-        self.bumpKeyLocked(kv.key);
-        self.used_bytes -|= kv.value.bytes;
-        self.freeHash(kv.value.value);
-        self.gpa.free(kv.key);
-        return true;
-    }
-
-    fn expireKeyLocked(self: *Store, key: []const u8) bool {
-        const entry = self.map.getPtr(key) orelse return false;
-        if (!isExpired(entry, self.now())) return false;
-        _ = self.removeKeyLocked(key);
-        return true;
-    }
-
-    fn freeHash(self: *Store, hash_in: Hash) void {
-        var hash = hash_in;
-        var it = hash.iterator();
-        while (it.next()) |entry| {
-            self.gpa.free(entry.key_ptr.*);
-            self.gpa.free(entry.value_ptr.*);
-        }
-        hash.deinit(self.gpa);
-    }
-
-    fn hashBytes(hash: *const Hash) usize {
-        var total: usize = VALUE_OVERHEAD;
-        var copy = hash.*;
-        var it = copy.iterator();
-        while (it.next()) |entry| {
-            total +|= FIELD_OVERHEAD +| entry.key_ptr.*.len +| entry.value_ptr.*.len;
-        }
-        return total;
-    }
+    // ============================================================
+    // Persistence helpers
+    // ============================================================
 
     fn entryBytes(key_len: usize, value_bytes: usize) usize {
         return key_len +| KEY_OVERHEAD +| value_bytes;
     }
 
-    fn projectedReplacement(self: *Store, key_len: usize, new_value_bytes: usize, old: ?*Entry) usize {
-        const new_entry_bytes = entryBytes(key_len, new_value_bytes);
-        if (old) |entry| return self.used_bytes -| entry.bytes +| new_entry_bytes;
-        return self.used_bytes +| new_entry_bytes;
+    fn serializeEntryLocked(self: *Store, key: []const u8, entry: *Entry, now_ms: i64) !void {
+        const data = try hash_mod.serialize(self.gpa, &entry.value);
+        defer self.gpa.free(data);
+
+        var path_buffer: [128]u8 = undefined;
+        const rel_path = persist_mod.Persist.objectPath(key, &path_buffer);
+
+        try self.persist.writeObject(rel_path, data);
+        try self.persist.putMeta(
+            key,
+            entry.expires_at_ms,
+            entry.field_count,
+            data.len,
+            rel_path,
+            now_ms,
+        );
     }
 
-    fn hashBytesAfterUpdates(old: ?*Entry, fields: []const Field) usize {
-        var total: usize = VALUE_OVERHEAD;
-        if (old) |entry| total = hashBytes(&entry.value);
+    const RemovedPersist = struct {
+        existed: bool = false,
+        unexpired: bool = false,
+    };
 
-        var i: usize = 0;
-        while (i < fields.len) : (i += 1) {
-            if (hasLaterField(fields, i)) continue;
-            const field = fields[i];
-            if (old) |entry| {
-                if (entry.value.get(field.field)) |old_value| {
-                    total -|= FIELD_OVERHEAD +| field.field.len +| old_value.len;
-                }
-            }
-            total +|= FIELD_OVERHEAD +| field.field.len +| field.value.len;
+    /// Removes the SQLite row and its object file. Returns whether a row
+    /// existed and whether it was still live (unexpired) at `now_ms`.
+    fn removePersistedLocked(self: *Store, key: []const u8, now_ms: i64) RemovedPersist {
+        var meta_opt = self.persist.getMeta(self.gpa, key) catch |err| {
+            std.log.err("metadata read failed for {s}: {t}", .{ key, err });
+            return .{};
+        };
+
+        if (meta_opt) |*meta| {
+            defer meta.deinit(self.gpa);
+
+            const expired = if (meta.expires_at_ms) |expires| expires <= now_ms else false;
+
+            _ = self.persist.deleteMeta(key) catch |err| {
+                std.log.err("metadata delete failed for {s}: {t}", .{ key, err });
+            };
+            self.persist.deleteObject(meta.object_path) catch |err| {
+                std.log.err("object delete failed for {s}: {t}", .{ meta.object_path, err });
+            };
+            return .{ .existed = true, .unexpired = !expired };
         }
-        return total;
+        return .{};
     }
 
-    fn sweepExpiredLocked(self: *Store) void {
+    /// Removes a key from both layers. Returns true only when the key was live
+    /// (unexpired) and therefore counts as a successful delete.
+    fn deleteKeyLocked(self: *Store, key: []const u8, entry_opt: ?*Entry) bool {
         const now_ms = self.now();
-        var expired: std.ArrayList([]const u8) = .empty;
-        defer expired.deinit(self.gpa);
+        const entry = entry_opt orelse self.map.get(key);
 
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            if (isExpired(entry.value_ptr, now_ms)) {
-                expired.append(self.gpa, entry.key_ptr.*) catch break;
+        const removed_persist = self.removePersistedLocked(key, now_ms);
+
+        var live = removed_persist.unexpired;
+        if (entry) |e| {
+            if (!isExpired(e, now_ms)) live = true;
+            // Bump before `removeEntryLocked` frees the key.
+            self.bumpKeyLocked(key);
+            self.removeEntryLocked(e);
+        } else if (removed_persist.existed) {
+            self.bumpKeyLocked(key);
+        }
+
+        return live;
+    }
+
+    fn expireKeyLocked(self: *Store, key: []const u8, now_ms: i64) bool {
+        if (self.map.get(key)) |entry| {
+            if (!isExpired(entry, now_ms)) return false;
+            _ = self.deleteKeyLocked(key, entry);
+            return true;
+        }
+
+        var meta_opt = self.persist.getMeta(self.gpa, key) catch |err| {
+            std.log.err("metadata read failed for {s}: {t}", .{ key, err });
+            return false;
+        };
+        if (meta_opt) |*meta| {
+            defer meta.deinit(self.gpa);
+            const expired = if (meta.expires_at_ms) |expires| expires <= now_ms else false;
+            if (!expired) return false;
+
+            _ = self.persist.deleteMeta(key) catch |err| {
+                std.log.err("metadata delete failed for {s}: {t}", .{ key, err });
+            };
+            self.persist.deleteObject(meta.object_path) catch |err| {
+                std.log.err("object delete failed for {s}: {t}", .{ meta.object_path, err });
+            };
+            self.bumpKeyLocked(key);
+            return true;
+        }
+        return false;
+    }
+
+    /// Looks up `key` in the LRU cache, lazily loading it from disk on a miss.
+    /// Expired keys are removed from both layers.
+    fn loadEntryLocked(self: *Store, key: []const u8, now_ms: i64) Error!?*Entry {
+        if (self.map.get(key)) |entry| {
+            if (isExpired(entry, now_ms)) {
+                _ = self.deleteKeyLocked(key, entry);
+                return null;
+            }
+            self.touchLocked(entry);
+            return entry;
+        }
+
+        var meta_opt = self.persist.getMeta(self.gpa, key) catch |err| {
+            std.log.err("metadata read failed for {s}: {t}", .{ key, err });
+            return error.PersistFailed;
+        };
+        if (meta_opt == null) return null;
+
+        var meta = &meta_opt.?;
+        defer meta.deinit(self.gpa);
+
+        if (meta.expires_at_ms) |expires| {
+            if (expires <= now_ms) {
+                _ = self.persist.deleteMeta(key) catch |err| {
+                    std.log.err("metadata delete failed for {s}: {t}", .{ key, err });
+                };
+                self.persist.deleteObject(meta.object_path) catch |err| {
+                    std.log.err("object delete failed for {s}: {t}", .{ meta.object_path, err });
+                };
+                self.bumpKeyLocked(key);
+                return null;
             }
         }
-        for (expired.items) |key| {
-            _ = self.removeKeyLocked(key);
-        }
-    }
 
-    pub fn sweepExpired(self: *Store) void {
-        self.lock();
-        defer self.unlock();
-        self.sweepExpiredLocked();
-    }
+        const data = self.persist.readObject(meta.object_path) catch |err| {
+            std.log.err("object read failed for {s}: {t}", .{ meta.object_path, err });
+            return error.PersistFailed;
+        };
+        defer self.gpa.free(data);
 
-    fn flushLocked(self: *Store) void {
-        var revisions = self.revisions.iterator();
-        while (revisions.next()) |entry| entry.value_ptr.* +%= 1;
+        const value = hash_mod.deserialize(self.gpa, data) catch |err| {
+            std.log.err("object decode failed for {s}: {t}", .{ meta.object_path, err });
+            return error.CorruptObject;
+        };
 
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            self.freeHash(entry.value_ptr.value);
-            self.gpa.free(entry.key_ptr.*);
-        }
-        self.map.clearRetainingCapacity();
-        self.used_bytes = 0;
+        const owned_key = try self.gpa.dupe(u8, key);
+        const entry = self.gpa.create(Entry) catch |err| {
+            self.gpa.free(owned_key);
+            hash_mod.deinit(self.gpa, value);
+            return err;
+        };
+        entry.* = .{
+            .key = owned_key,
+            .value = value,
+            .expires_at_ms = meta.expires_at_ms,
+            .bytes = entryBytes(key.len, hash_mod.bytes(&value)),
+            .field_count = @intCast(value.count()),
+        };
+
+        self.map.put(self.gpa, entry.key, entry) catch |err| {
+            self.gpa.destroy(entry);
+            self.gpa.free(owned_key);
+            hash_mod.deinit(self.gpa, value);
+            return err;
+        };
+
+        self.linkFrontLocked(entry);
+        self.used_bytes +|= entry.bytes;
+        self.evictToBudgetLocked(entry);
+        return entry;
     }
 
     // ============================================================
     // Key commands
     // ============================================================
 
+    fn containsLocked(self: *Store, key: []const u8, now_ms: i64) bool {
+        if (self.map.get(key)) |entry| {
+            if (isExpired(entry, now_ms)) {
+                _ = self.deleteKeyLocked(key, entry);
+                return false;
+            }
+            self.touchLocked(entry);
+            return true;
+        }
+
+        var meta_opt = self.persist.getMeta(self.gpa, key) catch |err| {
+            std.log.err("metadata read failed for {s}: {t}", .{ key, err });
+            return false;
+        };
+        if (meta_opt) |*meta| {
+            defer meta.deinit(self.gpa);
+            if (meta.expires_at_ms) |expires| {
+                if (expires <= now_ms) {
+                    _ = self.persist.deleteMeta(key) catch |err| {
+                        std.log.err("metadata delete failed for {s}: {t}", .{ key, err });
+                    };
+                    self.persist.deleteObject(meta.object_path) catch |err| {
+                        std.log.err("object delete failed for {s}: {t}", .{ meta.object_path, err });
+                    };
+                    self.bumpKeyLocked(key);
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
     pub fn exists(self: *Store, keys: []const []const u8) u64 {
         self.lock();
         defer self.unlock();
+        const now_ms = self.now();
         var count: u64 = 0;
         for (keys) |key| {
-            _ = self.expireKeyLocked(key);
-            if (self.map.contains(key)) count += 1;
+            if (self.containsLocked(key, now_ms)) count += 1;
         }
         return count;
     }
@@ -281,8 +477,7 @@ pub const Store = struct {
         defer self.unlock();
         var count: u64 = 0;
         for (keys) |key| {
-            _ = self.expireKeyLocked(key);
-            if (self.removeKeyLocked(key)) count += 1;
+            if (self.deleteKeyLocked(key, null)) count += 1;
         }
         return count;
     }
@@ -290,23 +485,77 @@ pub const Store = struct {
     pub fn expire(self: *Store, key: []const u8, seconds: i64) i64 {
         self.lock();
         defer self.unlock();
-        _ = self.expireKeyLocked(key);
-        const entry = self.map.getPtr(key) orelse return 0;
+        const now_ms = self.now();
+
+        // Expired values are treated as absent.
+        if (self.map.get(key)) |entry| {
+            if (isExpired(entry, now_ms)) {
+                _ = self.deleteKeyLocked(key, entry);
+                return 0;
+            }
+        } else if (self.expireKeyLocked(key, now_ms)) {
+            return 0;
+        }
 
         if (seconds <= 0) {
-            _ = self.removeKeyLocked(key);
-            return 1;
+            return if (self.deleteKeyLocked(key, null)) 1 else 0;
         }
 
         const delta_ms = std.math.mul(i64, seconds, 1000) catch std.math.maxInt(i64);
-        entry.expires_at_ms = self.now() +| delta_ms;
-        self.bumpKeyLocked(key);
-        return 1;
+        const expires_at = now_ms +| delta_ms;
+
+        if (self.map.get(key)) |entry| {
+            entry.expires_at_ms = expires_at;
+            self.touchLocked(entry);
+
+            const updated = self.persist.updateExpiry(key, expires_at, now_ms) catch false;
+            if (!updated) {
+                // Self-heal a missing metadata row/object from the cached entry.
+                self.serializeEntryLocked(key, entry, now_ms) catch |err| {
+                    std.log.err("metadata upsert failed for {s}: {t}", .{ key, err });
+                };
+            }
+            self.bumpKeyLocked(key);
+            return 1;
+        }
+
+        const updated = self.persist.updateExpiry(key, expires_at, now_ms) catch |err| blk: {
+            std.log.err("expiry update failed for {s}: {t}", .{ key, err });
+            break :blk false;
+        };
+        if (updated) {
+            self.bumpKeyLocked(key);
+            return 1;
+        }
+        return 0;
     }
 
     // ============================================================
     // Hash commands
     // ============================================================
+
+    fn applyPending(self: *Store, hash: *Hash, pending: []OwnedField) !usize {
+        try hash.ensureUnusedCapacity(self.gpa, @intCast(pending.len));
+
+        var added: usize = 0;
+        for (pending) |*field| {
+            const result = hash.getOrPutAssumeCapacity(field.field.?);
+            if (result.found_existing) {
+                self.gpa.free(field.field.?);
+                field.field = null;
+                self.gpa.free(result.value_ptr.*);
+                result.value_ptr.* = field.value.?;
+                field.value = null;
+            } else {
+                result.key_ptr.* = field.field.?;
+                result.value_ptr.* = field.value.?;
+                field.field = null;
+                field.value = null;
+                added += 1;
+            }
+        }
+        return added;
+    }
 
     pub fn hset(self: *Store, key: []const u8, fields: []const Field) Error!HSetOutcome {
         if (fields.len == 0) return .{ .added = 0 };
@@ -314,158 +563,225 @@ pub const Store = struct {
         self.lock();
         defer self.unlock();
 
-        _ = self.expireKeyLocked(key);
-        const old = self.map.getPtr(key);
-
-        var new_hash_bytes = hashBytesAfterUpdates(old, fields);
-        var projected = self.projectedReplacement(key.len, new_hash_bytes, old);
-        if (projected > self.max_bytes) {
-            self.sweepExpiredLocked();
-            const old_after = self.map.getPtr(key);
-            new_hash_bytes = hashBytesAfterUpdates(old_after, fields);
-            projected = self.projectedReplacement(key.len, new_hash_bytes, old_after);
-        }
-        if (projected > self.max_bytes) return error.MaxMemory;
+        const now_ms = self.now();
+        const existing = self.loadEntryLocked(key, now_ms) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.PersistFailed,
+        };
 
         var pending: std.ArrayList(OwnedField) = .empty;
         defer {
-            for (pending.items) |field| {
-                if (field.field) |owned| self.gpa.free(owned);
-                if (field.value) |owned| self.gpa.free(owned);
-            }
+            freePending(self.gpa, pending.items);
             pending.deinit(self.gpa);
         }
+        try duplicateFields(self.gpa, fields, &pending);
 
-        var i: usize = 0;
-        while (i < fields.len) : (i += 1) {
-            if (hasLaterField(fields, i)) continue;
-            const field = fields[i];
-            const owned_field = try self.gpa.dupe(u8, field.field);
-            errdefer self.gpa.free(owned_field);
-            const owned_value = try self.gpa.dupe(u8, field.value);
-            errdefer self.gpa.free(owned_value);
-            try pending.append(self.gpa, .{ .field = owned_field, .value = owned_value });
-        }
+        const old_bytes = if (existing) |entry| entry.bytes else 0;
+        const new_hash_bytes = hashBytesAfterUpdates(
+            if (existing) |entry| &entry.value else null,
+            fields,
+        );
 
-        const old_after = self.map.getPtr(key);
-        if (old_after) |entry| {
-            var hash = &entry.value;
-            try hash.ensureUnusedCapacity(self.gpa, @intCast(pending.items.len));
-
-            var added: usize = 0;
-            for (pending.items) |*field| {
-                const result = hash.getOrPutAssumeCapacity(field.field.?);
-                if (result.found_existing) {
-                    self.gpa.free(field.field.?);
-                    field.field = null;
-                    self.gpa.free(result.value_ptr.*);
-                    result.value_ptr.* = field.value.?;
-                    field.value = null;
-                } else {
-                    result.key_ptr.* = field.field.?;
-                    result.value_ptr.* = field.value.?;
-                    field.field = null;
-                    field.value = null;
-                    added += 1;
-                }
-            }
-
-            entry.bytes = entryBytes(key.len, new_hash_bytes);
-            self.used_bytes = projected;
-            self.bumpKeyLocked(key);
-            return .{ .added = added };
-        }
-
-        var hash: Hash = .empty;
-        errdefer {
-            var it = hash.iterator();
-            while (it.next()) |entry| {
-                self.gpa.free(entry.key_ptr.*);
-                self.gpa.free(entry.value_ptr.*);
-            }
-            hash.deinit(self.gpa);
-        }
-        try hash.ensureTotalCapacity(self.gpa, @intCast(pending.items.len));
-
+        var entry: *Entry = undefined;
         var added: usize = 0;
-        for (pending.items) |*field| {
-            hash.putAssumeCapacity(field.field.?, field.value.?);
-            field.field = null;
-            field.value = null;
-            added += 1;
+
+        if (existing) |old_entry| {
+            entry = old_entry;
+            added = try self.applyPending(&entry.value, pending.items);
+            entry.field_count = @intCast(entry.value.count());
+            entry.bytes = entryBytes(key.len, new_hash_bytes);
+            self.used_bytes -|= old_bytes;
+            self.used_bytes +|= entry.bytes;
+            self.touchLocked(entry);
+        } else {
+            var value: Hash = .empty;
+            added = self.applyPending(&value, pending.items) catch |err| {
+                hash_mod.deinit(self.gpa, value);
+                return err;
+            };
+
+            const owned_key = try self.gpa.dupe(u8, key);
+            const new_entry = self.gpa.create(Entry) catch |err| {
+                self.gpa.free(owned_key);
+                hash_mod.deinit(self.gpa, value);
+                return err;
+            };
+            new_entry.* = .{
+                .key = owned_key,
+                .value = value,
+                .bytes = entryBytes(key.len, new_hash_bytes),
+                .field_count = @intCast(value.count()),
+            };
+
+            self.map.put(self.gpa, new_entry.key, new_entry) catch |err| {
+                self.gpa.destroy(new_entry);
+                self.gpa.free(owned_key);
+                hash_mod.deinit(self.gpa, value);
+                return err;
+            };
+
+            entry = new_entry;
+            self.linkFrontLocked(entry);
+            self.used_bytes +|= entry.bytes;
         }
 
-        const owned_key = try self.gpa.dupe(u8, key);
-        errdefer self.gpa.free(owned_key);
-        try self.map.put(self.gpa, owned_key, .{
-            .value = hash,
-            .bytes = entryBytes(key.len, new_hash_bytes),
-        });
-        self.used_bytes = projected;
+        entry.field_count = @intCast(entry.value.count());
+        self.serializeEntryLocked(key, entry, now_ms) catch |err| {
+            std.log.err("failed to persist {s}: {t}", .{ key, err });
+            return error.PersistFailed;
+        };
+
         self.bumpKeyLocked(key);
+        self.evictToBudgetLocked(null);
         return .{ .added = added };
     }
 
     pub fn hgetall(self: *Store, allocator: std.mem.Allocator, key: []const u8) Error!?HashCopy {
         self.lock();
         defer self.unlock();
-        _ = self.expireKeyLocked(key);
-        const entry = self.map.getPtr(key) orelse return null;
 
-        var copy: HashCopy = .{};
-        errdefer copy.deinit(allocator);
+        const now_ms = self.now();
+        const entry = self.loadEntryLocked(key, now_ms) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.PersistFailed,
+        };
+        if (entry == null) return null;
 
-        var it = entry.value.iterator();
-        while (it.next()) |field| {
-            const owned_field = try allocator.dupe(u8, field.key_ptr.*);
-            errdefer allocator.free(owned_field);
-            const owned_value = try allocator.dupe(u8, field.value_ptr.*);
-            errdefer allocator.free(owned_value);
-            try copy.map.put(allocator, owned_field, owned_value);
-        }
-        return copy;
+        const copy = hash_mod.copyTo(allocator, &entry.?.value) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+
+        // The caller owns a copy, so the cached entry may be evicted if the
+        // budget is still over the limit (for example, a single oversized key).
+        self.evictToBudgetLocked(null);
+        return .{ .map = copy };
     }
 
     pub fn hdel(self: *Store, key: []const u8, fields: []const []const u8) Error!u64 {
         self.lock();
         defer self.unlock();
-        _ = self.expireKeyLocked(key);
-        const entry = self.map.getPtr(key) orelse return 0;
 
-        var hash = &entry.value;
+        const now_ms = self.now();
+        const entry = self.loadEntryLocked(key, now_ms) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.PersistFailed,
+        };
+        if (entry == null) return 0;
+
         var removed: u64 = 0;
-        var removed_bytes: usize = 0;
         for (fields) |field| {
-            if (hash.fetchRemove(field)) |kv| {
+            if (entry.?.value.fetchRemove(field)) |kv| {
                 removed += 1;
-                removed_bytes +|= FIELD_OVERHEAD +| kv.key.len +| kv.value.len;
                 self.gpa.free(kv.key);
                 self.gpa.free(kv.value);
             }
         }
 
-        if (hash.count() == 0) {
-            const kv = self.map.fetchRemove(key).?;
-            self.bumpKeyLocked(kv.key);
-            self.used_bytes -|= kv.value.bytes;
-            self.gpa.free(kv.key);
-            var empty_hash = kv.value.value;
-            empty_hash.deinit(self.gpa);
-        } else if (removed > 0) {
-            entry.bytes -|= removed_bytes;
-            self.used_bytes -|= removed_bytes;
-            self.bumpKeyLocked(key);
+        if (removed == 0) return 0;
+
+        if (entry.?.value.count() == 0) {
+            _ = self.deleteKeyLocked(key, entry.?);
+            return removed;
         }
 
+        const old_bytes = entry.?.bytes;
+        entry.?.field_count = @intCast(entry.?.value.count());
+        entry.?.bytes = entryBytes(key.len, hash_mod.bytes(&entry.?.value));
+        self.used_bytes -|= old_bytes;
+        self.used_bytes +|= entry.?.bytes;
+        self.touchLocked(entry.?);
+
+        self.serializeEntryLocked(key, entry.?, now_ms) catch |err| {
+            std.log.err("failed to persist {s}: {t}", .{ key, err });
+            return error.PersistFailed;
+        };
+
+        self.bumpKeyLocked(key);
+        self.evictToBudgetLocked(null);
         return removed;
     }
 
     pub fn hlen(self: *Store, key: []const u8) Error!u64 {
         self.lock();
         defer self.unlock();
-        _ = self.expireKeyLocked(key);
-        const entry = self.map.getPtr(key) orelse return 0;
-        return entry.value.count();
+
+        const now_ms = self.now();
+        if (self.map.get(key)) |entry| {
+            if (isExpired(entry, now_ms)) {
+                _ = self.deleteKeyLocked(key, entry);
+                return 0;
+            }
+            self.touchLocked(entry);
+            return entry.field_count;
+        }
+
+        var meta_opt = self.persist.getMeta(self.gpa, key) catch |err| {
+            std.log.err("metadata read failed for {s}: {t}", .{ key, err });
+            return error.PersistFailed;
+        };
+        if (meta_opt) |*meta| {
+            defer meta.deinit(self.gpa);
+            if (meta.expires_at_ms) |expires| {
+                if (expires <= now_ms) {
+                    _ = self.expireKeyLocked(key, now_ms);
+                    return 0;
+                }
+            }
+            return meta.field_count;
+        }
+        return 0;
+    }
+
+    // ============================================================
+    // Sweeping
+    // ============================================================
+
+    pub fn sweepExpired(self: *Store) void {
+        self.lock();
+        defer self.unlock();
+        self.sweepExpiredLocked();
+    }
+
+    fn sweepExpiredLocked(self: *Store) void {
+        const now_ms = self.now();
+
+        // First drop expired cached entries. They are write-through, so this
+        // also removes their metadata and object files.
+        var cached_expired: std.ArrayList([]const u8) = .empty;
+        defer cached_expired.deinit(self.gpa);
+
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            if (isExpired(entry.value_ptr.*, now_ms)) {
+                cached_expired.append(self.gpa, entry.value_ptr.*.key) catch break;
+            }
+        }
+        for (cached_expired.items) |key| {
+            if (self.map.get(key)) |entry| {
+                _ = self.deleteKeyLocked(key, entry);
+            }
+        }
+
+        // Then sweep disk-only rows.
+        const expired = self.persist.listExpired(self.gpa, now_ms) catch |err| {
+            std.log.err("expired-key scan failed: {t}", .{err});
+            return;
+        };
+        defer persist_mod.Persist.freeExpired(self.gpa, expired);
+
+        for (expired) |item| {
+            if (self.map.get(item.key)) |entry| {
+                self.bumpKeyLocked(item.key);
+                self.removeEntryLocked(entry);
+            }
+            _ = self.persist.deleteMeta(item.key) catch |err| {
+                std.log.err("metadata delete failed for {s}: {t}", .{ item.key, err });
+            };
+            self.persist.deleteObject(item.object_path) catch |err| {
+                std.log.err("object delete failed for {s}: {t}", .{ item.object_path, err });
+            };
+            self.bumpKeyLocked(item.key);
+        }
     }
 };
 
@@ -474,10 +790,179 @@ const OwnedField = struct {
     value: ?[]u8,
 };
 
+fn freePending(gpa: std.mem.Allocator, pending: []OwnedField) void {
+    for (pending) |field| {
+        if (field.field) |owned| gpa.free(owned);
+        if (field.value) |owned| gpa.free(owned);
+    }
+}
+
+fn duplicateFields(
+    gpa: std.mem.Allocator,
+    fields: []const Field,
+    pending: *std.ArrayList(OwnedField),
+) !void {
+    var i: usize = 0;
+    while (i < fields.len) : (i += 1) {
+        if (hasLaterField(fields, i)) continue;
+        const field = fields[i];
+        const owned_field = try gpa.dupe(u8, field.field);
+        errdefer gpa.free(owned_field);
+        const owned_value = try gpa.dupe(u8, field.value);
+        errdefer gpa.free(owned_value);
+        try pending.append(gpa, .{ .field = owned_field, .value = owned_value });
+    }
+}
+
+fn hashBytesAfterUpdates(old: ?*const Hash, fields: []const Field) usize {
+    var total: usize = VALUE_OVERHEAD;
+    if (old) |hash| total = hash_mod.bytes(hash);
+
+    var i: usize = 0;
+    while (i < fields.len) : (i += 1) {
+        if (hasLaterField(fields, i)) continue;
+        const field = fields[i];
+        if (old) |hash| {
+            if (hash.get(field.field)) |old_value| {
+                total -|= FIELD_OVERHEAD +| field.field.len +| old_value.len;
+            }
+        }
+        total +|= FIELD_OVERHEAD +| field.field.len +| field.value.len;
+    }
+    return total;
+}
+
 fn hasLaterField(fields: []const Field, index: usize) bool {
     var i = index + 1;
     while (i < fields.len) : (i += 1) {
         if (std.mem.eql(u8, fields[index].field, fields[i].field)) return true;
     }
     return false;
+}
+// ============================================================
+// Tests
+// ============================================================
+
+const TestEnv = struct {
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    /// Heap-allocated so the `Io` handle keeps a stable address.
+    threaded: *std.Io.Threaded,
+    tmp: persist_mod.TmpDir,
+    store: Store,
+
+    fn init(gpa: std.mem.Allocator, max_bytes: usize) !TestEnv {
+        const threaded = try gpa.create(std.Io.Threaded);
+        errdefer gpa.destroy(threaded);
+        threaded.* = .init(gpa, .{});
+        const io = threaded.io();
+
+        var tmp = try persist_mod.makeTmpDir(gpa, io);
+        errdefer {
+            tmp.remove(io);
+            gpa.free(tmp.path);
+        }
+
+        const store = try Store.init(gpa, io, max_bytes, 50, tmp.path);
+        return .{ .gpa = gpa, .io = io, .threaded = threaded, .tmp = tmp, .store = store };
+    }
+
+    fn cleanup(self: *TestEnv) void {
+        self.store.deinit();
+        self.tmp.remove(self.io);
+        self.gpa.free(self.tmp.path);
+        self.threaded.deinit();
+        self.gpa.destroy(self.threaded);
+    }
+};
+
+test "store writes through to disk and reloads after a restart" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa, 1024 * 1024);
+    defer env.cleanup();
+
+    const fields = [_]Field{
+        .{ .field = "slug", .value = "demo" },
+        .{ .field = "content", .value = "hello from disk" },
+    };
+    _ = try env.store.hset("slug:demo", &fields);
+    _ = env.store.expire("slug:demo", 600);
+
+    try std.testing.expectEqual(@as(u64, 1), env.store.exists(&.{"slug:demo"}));
+    try std.testing.expectEqual(@as(u64, 2), try env.store.hlen("slug:demo"));
+
+    // Simulate a restart: tear the store down, then rebuild it over the same
+    // data directory. The value must come back from disk.
+    env.store.deinit();
+    env.store = try Store.init(gpa, env.io, 1024 * 1024, 50, env.tmp.path);
+
+    try std.testing.expectEqual(@as(u64, 1), env.store.exists(&.{"slug:demo"}));
+
+    var copy = (try env.store.hgetall(gpa, "slug:demo")).?;
+    defer copy.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), copy.map.count());
+    try std.testing.expectEqualStrings("hello from disk", copy.map.get("content").?);
+}
+
+test "store evicts least recently used keys while staying on disk" {
+    const gpa = std.testing.allocator;
+    const max_bytes: usize = 2048;
+
+    var env = try TestEnv.init(gpa, max_bytes);
+    defer env.cleanup();
+
+    var index: usize = 0;
+    while (index < 60) : (index += 1) {
+        var key_buffer: [64]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buffer, "slug:room-{d}", .{index});
+        var value_buffer: [96]u8 = undefined;
+        const value = try std.fmt.bufPrint(&value_buffer, "payload-{d}-{s}", .{ index, "0123456789abcdef" });
+        _ = try env.store.hset(key, &[_]Field{
+            .{ .field = "slug", .value = key },
+            .{ .field = "content", .value = value },
+        });
+        _ = env.store.expire(key, 600);
+    }
+
+    // The cache honours its budget even under sustained writes.
+    try std.testing.expect(env.store.used_bytes <= env.store.max_bytes);
+
+    // Everything is still readable: cached keys and evicted keys alike.
+    index = 0;
+    while (index < 60) : (index += 1) {
+        var key_buffer: [64]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buffer, "slug:room-{d}", .{index});
+        try std.testing.expectEqual(@as(u64, 1), env.store.exists(&.{key}));
+
+        var copy = (try env.store.hgetall(gpa, key)).?;
+        defer copy.deinit(gpa);
+
+        var expected_buffer: [96]u8 = undefined;
+        const expected = try std.fmt.bufPrint(&expected_buffer, "payload-{d}-{s}", .{ index, "0123456789abcdef" });
+        try std.testing.expectEqualStrings(expected, copy.map.get("content").?);
+    }
+
+    try std.testing.expect(env.store.used_bytes <= env.store.max_bytes);
+}
+
+test "store removes expired keys from memory and disk" {
+    const gpa = std.testing.allocator;
+
+    var env = try TestEnv.init(gpa, 1024 * 1024);
+    defer env.cleanup();
+
+    _ = try env.store.hset("slug:temp", &[_]Field{.{ .field = "content", .value = "short lived" }});
+    _ = env.store.expire("slug:temp", 1);
+
+    std.Io.sleep(env.io, std.Io.Duration.fromMilliseconds(1_200), .awake) catch {};
+    env.store.sweepExpired();
+
+    try std.testing.expectEqual(@as(u64, 0), env.store.exists(&.{"slug:temp"}));
+    try std.testing.expectEqual(@as(u64, 0), try env.store.hlen("slug:temp"));
+
+    // The metadata row is gone too.
+    var meta_opt = try env.store.persist.getMeta(gpa, "slug:temp");
+    defer if (meta_opt) |*meta| meta.deinit(gpa);
+    try std.testing.expect(meta_opt == null);
 }
