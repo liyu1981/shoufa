@@ -285,7 +285,7 @@ fn handleRequest(
         return;
     }
 
-    try serveStatic(request, path);
+    try serveStatic(request, path, query);
 }
 
 fn handleWait(store: *Store, request: *std.http.Server.Request, query: []const u8) !void {
@@ -320,9 +320,17 @@ fn handleWait(store: *Store, request: *std.http.Server.Request, query: []const u
     try sendResponse(request, .ok, body, "application/json; charset=utf-8", "no-store");
 }
 
-fn serveStatic(request: *std.http.Server.Request, path: []const u8) !void {
+fn serveStatic(request: *std.http.Server.Request, path: []const u8, query: []const u8) !void {
     if (findAsset(path)) |asset| {
         try sendResponse(request, .ok, asset.data, asset.content_type, asset.cache_control);
+        return;
+    }
+
+    // Space links are shared as /s/<slug>. Typing /<slug> directly is a
+    // near-miss, so send the browser to the canonical URL instead of showing
+    // the SPA shell for a route that does not exist.
+    if (rootSlugOf(path)) |slug| {
+        try sendRedirect(request, slug, query);
         return;
     }
 
@@ -343,6 +351,53 @@ fn findAsset(path: []const u8) ?web.Asset {
         if (std.mem.eql(u8, asset.path, normalized)) return asset;
     }
     return null;
+}
+
+/// Returns the slug for a root-level space path such as `/soft-nose` or
+/// `/soft-nose/`, and null for `/`, asset paths, and anything that is not a
+/// valid slug. Asset paths never reach here because `findAsset` runs first,
+/// and a single `s` segment is rejected by the slug rules.
+fn rootSlugOf(path: []const u8) ?[]const u8 {
+    if (path.len < 2 or path[0] != '/') return null;
+
+    var segment = path[1..];
+    while (segment.len > 0 and segment[segment.len - 1] == '/') {
+        segment = segment[0 .. segment.len - 1];
+    }
+    if (segment.len == 0) return null;
+    if (std.mem.indexOfScalar(u8, segment, '/')) |_| return null;
+    if (!api.isValidSlug(segment)) return null;
+    return segment;
+}
+
+fn sendRedirect(request: *std.http.Server.Request, slug: []const u8, query: []const u8) !void {
+    // `/s/` + slug always fits; the query is appended only when the whole
+    // target fits, so a long query is dropped rather than truncated.
+    var location_buffer: [256]u8 = undefined;
+    const target = try std.fmt.bufPrint(&location_buffer, "/s/{s}", .{slug});
+
+    var location = target;
+    if (query.len > 0 and target.len + 1 + query.len <= location_buffer.len) {
+        location_buffer[target.len] = '?';
+        @memcpy(location_buffer[target.len + 1 ..][0..query.len], query);
+        location = location_buffer[0 .. target.len + 1 + query.len];
+    }
+
+    var headers: [security_headers.len + 2]std.http.Header = undefined;
+    var count: usize = 0;
+    for (security_headers) |header| {
+        headers[count] = header;
+        count += 1;
+    }
+    headers[count] = .{ .name = "location", .value = location };
+    count += 1;
+    headers[count] = .{ .name = "cache-control", .value = "no-store" };
+    count += 1;
+
+    try request.respond("", .{
+        .status = .moved_permanently,
+        .extra_headers = headers[0..count],
+    });
 }
 
 fn looksLikeAsset(path: []const u8) bool {
