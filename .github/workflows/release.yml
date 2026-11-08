@@ -116,7 +116,9 @@ jobs:
           cp server/README.md "release/${NAME}/README.md"
           cp VERSION "release/${NAME}/VERSION"
           tar -czf "release/${NAME}.tar.gz" -C "release/${NAME}" .
-          sha256sum "release/${NAME}.tar.gz" > "release/${NAME}.tar.gz.sha256"
+          # Record only the basename so `sha256sum -c` works in the directory
+          # where users unpack/download the archive.
+          (cd release && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
 
       - uses: actions/upload-artifact@v4
         with:
