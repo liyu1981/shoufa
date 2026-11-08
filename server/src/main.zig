@@ -5,6 +5,7 @@ const std = @import("std");
 const config = @import("config.zig");
 const store_mod = @import("store.zig");
 const api = @import("api.zig");
+const config_cli = @import("config_cli.zig");
 const web = @import("web_assets.zig");
 const service = @import("service.zig");
 const version_info = @import("version.zig");
@@ -37,6 +38,13 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, command, "service-install")) {
             service.install(init, args[2..]) catch |err| {
                 std.log.err("service-install failed: {t}", .{err});
+                std.process.exit(1);
+            };
+            return;
+        }
+        if (std.mem.eql(u8, command, "config")) {
+            config_cli.run(init, args[2..]) catch |err| {
+                std.log.err("config failed: {t}", .{err});
                 std.process.exit(1);
             };
             return;

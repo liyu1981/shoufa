@@ -575,7 +575,14 @@ pub fn printUsage(io: std.Io) !void {
         \\
         \\Commands:
         \\  (none)          Run the Shoufa server
+        \\  config          Create ./config (use --upgrade to migrate one)
         \\  service-install Install/update the systemd service (Linux only)
+        \\
+        \\config options:
+        \\  --upgrade       Rewrite ./config in the current format, keeping
+        \\                  the values it already had
+        \\  --config PATH   File to create or upgrade (default ./config)
+        \\  -h, --help      Show this help
         \\
         \\Server options:
         \\  --config PATH   Config file (default ~/.config/shoufad/config)

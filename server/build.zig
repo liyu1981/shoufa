@@ -55,8 +55,23 @@ pub fn build(b: *std.Build) void {
     addSqlite(tests.root_module, b);
 
     const run_tests = b.addRunArtifact(tests);
+
+    // The config module is not reachable from the store, so it gets its own
+    // test root.
+    const config_tests = b.addTest(.{
+        .name = "shoufad-config-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/config.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    const run_config_tests = b.addRunArtifact(config_tests);
+
     const test_step = b.step("test", "Run server unit tests");
     test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_config_tests.step);
 }
 
 /// Compile the vendored SQLite amalgamation into a module. This keeps release

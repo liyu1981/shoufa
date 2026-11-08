@@ -87,6 +87,21 @@ The server should stay on `127.0.0.1` behind a TLS reverse proxy (Caddy, nginx,
 or Cloudflare Tunnel). There is no API token: the browser and API share an
 origin, and unsafe requests are checked for same-origin headers.
 
+### Creating or upgrading a config
+
+```bash
+shoufad config             # write ./config with default values
+shoufad config --upgrade   # rewrite ./config in the current format, keeping
+                           # its values; the original goes to ./config.bak
+```
+
+Both accept `--config PATH` (default `./config`). An upgrade normalises old key
+spellings (`max_memory = 5GB` → `max_memory_bytes = 5000000000`), adds the keys
+a current build expects, and reports what it could not carry over — including
+the retired `api_key` / `allow_anonymous` keys from the Redis era. It refuses to
+touch a file that does not look like a shoufa config, and re-running it on an
+already-current file is a no-op.
+
 Optional build-time canonical URL:
 
 ```bash

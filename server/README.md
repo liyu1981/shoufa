@@ -76,6 +76,20 @@ There are no API keys. The frontend and API are same-origin.
 `--data PATH` (or `SHOUFA_DATA` / `XDG_DATA_HOME`) overrides `data_dir` for a
 single run.
 
+### Create or upgrade a file
+
+```bash
+./zig-out/bin/shoufad config             # create ./config with default values
+./zig-out/bin/shoufad config --upgrade   # migrate ./config, keeping its values
+```
+
+Both take `--config PATH` (default `./config`). An upgrade copies the original
+to `<path>.bak`, normalises legacy key names and size spellings, then reports
+the keys it kept, the ones it filled in with defaults, the retired keys it
+dropped (`api_key`, `allow_anonymous`, …), and any key it did not recognise.
+It refuses to overwrite a file that does not look like a shoufa config and is
+idempotent on a file that is already current.
+
 ## Storage
 
 Everything is written through to disk; memory only holds a bounded cache.
