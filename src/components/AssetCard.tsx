@@ -6,6 +6,7 @@ import type { Asset } from "@/lib/asset"
 import { CountdownTimer } from "./CountdownTimer"
 import { ImageLightbox } from "./ImageLightbox"
 import { formatBytes, getAssetSize } from "@/lib/format"
+import { LinkifiedText } from "./LinkifiedText"
 
 interface AssetCardProps {
   asset: Asset
@@ -65,7 +66,7 @@ export function AssetCard({ asset, slug, onDelete }: AssetCardProps) {
           <div className="flex items-start gap-3">
             <FileText className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
             <pre className="text-sm font-mono whitespace-pre-wrap break-all text-foreground/90 leading-relaxed max-h-[200px] overflow-y-auto">
-              {asset.content}
+              <LinkifiedText text={asset.content} />
             </pre>
           </div>
         </div>
